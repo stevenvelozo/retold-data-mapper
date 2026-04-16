@@ -1,0 +1,66 @@
+{
+	"name": "retold-data-mapper",
+	"version": "0.0.1",
+	"description": "Cross-beacon schema mapping and data sync — discover remote databeacons on the Ultravisor mesh, define field mappings, and execute batch syncs without direct database access.",
+	"main": "source/Retold-DataMapper.js",
+	"bin": {
+		"retold-data-mapper": "bin/retold-data-mapper.js"
+	},
+	"scripts": {
+		"start": "node bin/retold-data-mapper.js",
+		"dev": "node test/dev-server.js",
+		"integration": "node test/integration-harness.js",
+		"test": "npx quack test",
+		"coverage": "npx quack coverage"
+	},
+	"mocha": {
+		"spec": "test/DataMapper_tests.js",
+		"diff": true,
+		"extension": [
+			"js"
+		],
+		"package": "./package.json",
+		"reporter": "spec",
+		"slow": "75",
+		"timeout": "30000",
+		"ui": "tdd",
+		"watch-files": [
+			"source/**/*.js",
+			"test/**/*.js"
+		],
+		"watch-ignore": [
+			"lib/vendor"
+		]
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/stevenvelozo/retold-data-mapper.git"
+	},
+	"keywords": [
+		"data",
+		"mapper",
+		"sync",
+		"ultravisor",
+		"beacon",
+		"ETL"
+	],
+	"author": "Steven Velozo <steven@velozo.com> (http://velozo.com/)",
+	"license": "MIT",
+	"bugs": {
+		"url": "https://github.com/stevenvelozo/retold-data-mapper/issues"
+	},
+	"homepage": "https://github.com/stevenvelozo/retold-data-mapper",
+	"devDependencies": {
+		"better-sqlite3": "^12.9.0",
+		"quackage": "^1.1.2"
+	},
+	"dependencies": {
+		"fable": "^3.1.70",
+		"fable-serviceproviderbase": "^3.0.19",
+		"fable-ultravisor-client": "^0.0.1",
+		"meadow-connection-manager": "^1.0.2",
+		"pict": "^1.0.364",
+		"retold-databeacon": "^0.0.5",
+		"ultravisor": "^1.0.23"
+	}
+}

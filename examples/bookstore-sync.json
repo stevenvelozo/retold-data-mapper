@@ -1,0 +1,55 @@
+{
+	"Name": "acme-to-beta-bookstore-sync",
+	"Description": "Sync book catalog from ACME's MSSQL to Beta's PostgreSQL",
+
+	"Ultravisor": {
+		"URL": "http://ultravisor.noc.example:54321",
+		"UserName": "mapper-service",
+		"Password": ""
+	},
+
+	"Source": {
+		"BeaconName": "customer-acme",
+		"ConnectionHash": "bookstore-mssql",
+		"IDBeaconConnection": 1
+	},
+
+	"Target": {
+		"BeaconName": "customer-beta",
+		"ConnectionHash": "analytics-pg",
+		"IDBeaconConnection": 1
+	},
+
+	"EntityMappings": [
+		{
+			"SourceEntity": "Book",
+			"TargetEntity": "Publication",
+			"IdentityMapping": { "Source": "ISBN", "Target": "ProductCode" },
+			"SyncMode": "Upsert",
+			"Fields": [
+				{ "Source": "Title",            "Target": "Name" },
+				{ "Source": "ISBN",             "Target": "ProductCode" },
+				{ "Source": "PublicationYear",  "Target": "Year" },
+				{ "Source": "Genre",            "Target": "Category" },
+				{ "Source": "Language",         "Target": "LanguageCode" }
+			]
+		},
+		{
+			"SourceEntity": "Author",
+			"TargetEntity": "Author",
+			"IdentityMapping": { "Source": "GUIDAuthor", "Target": "ExternalGUID" },
+			"SyncMode": "InsertOnly",
+			"Fields": [
+				{ "Source": "FullName",  "Target": "DisplayName" },
+				{ "Source": "BirthYear", "Target": "BornYear" }
+			]
+		}
+	],
+
+	"Options": {
+		"BatchSize": 100,
+		"ContinueOnError": true,
+		"DryRun": false,
+		"LogLevel": "info"
+	}
+}
