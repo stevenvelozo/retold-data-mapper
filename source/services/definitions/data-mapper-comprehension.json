@@ -1,0 +1,38 @@
+{
+	"Hash": "data-mapper-comprehension",
+	"Type": "data-mapper-comprehension",
+	"Name": "Comprehension Accumulator",
+	"Description": "Collects mapped records into a comprehension object keyed by GUID. Accumulates until finalized.",
+	"Category": "data",
+	"Capability": "Data Mapper",
+	"Action": "Accumulate",
+	"Tier": "Engine",
+
+	"EventInputs": [
+		{ "Name": "AddRecord", "Description": "Add a mapped record to the comprehension" },
+		{ "Name": "Finalize", "Description": "All records added; emit the completed comprehension" }
+	],
+
+	"EventOutputs": [
+		{ "Name": "RecordAdded", "Description": "Record was accumulated" },
+		{ "Name": "Complete", "Description": "Comprehension finalized and ready" },
+		{ "Name": "Error", "IsError": true, "Description": "Accumulation failed" }
+	],
+
+	"SettingsInputs": [
+		{ "Name": "MappedRecord", "DataType": "Object", "Required": false, "Description": "Record to add (from Record Generation.MappedRecord)" },
+		{ "Name": "Entity", "DataType": "String", "Required": true, "Description": "Entity name for the comprehension key" },
+		{ "Name": "GUIDField", "DataType": "String", "Required": true, "Description": "Field name used as the unique key (e.g. GUIDMappedBook)" }
+	],
+
+	"StateOutputs": [
+		{ "Name": "Comprehension", "DataType": "Object", "Description": "Accumulated records: { Entity: { GUIDValue: record, ... } }" },
+		{ "Name": "RecordCount", "DataType": "Number", "Description": "Total records accumulated" }
+	],
+
+	"DefaultSettings": {
+		"MappedRecord": {},
+		"Entity": "",
+		"GUIDField": ""
+	}
+}

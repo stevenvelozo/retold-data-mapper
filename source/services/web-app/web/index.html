@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Retold Data Mapper</title>
+	<link rel="stylesheet" href="css/mapper.css">
+</head>
+<body>
+	<header>
+		<h1>Retold Data Mapper</h1>
+		<div class="status" id="status">Disconnected</div>
+	</header>
+
+	<div class="toolbar">
+		<label>Source Beacon</label>
+		<input type="text" id="source-url" placeholder="http://localhost:18390" value="http://localhost:18390" style="width:200px">
+		<select id="source-connection"></select>
+		<select id="source-entity"></select>
+		<button onclick="discoverSource()">Discover</button>
+
+		<div style="width:1px; height:20px; background:var(--border); margin:0 4px;"></div>
+
+		<label>Target Beacon</label>
+		<input type="text" id="target-url" placeholder="http://localhost:18391" value="http://localhost:18391" style="width:200px">
+		<select id="target-connection"></select>
+		<select id="target-entity"></select>
+		<button onclick="discoverTarget()">Discover</button>
+
+		<div style="width:1px; height:20px; background:var(--border); margin:0 4px;"></div>
+
+		<button class="secondary" onclick="generateJSON()">Generate JSON</button>
+		<button onclick="copyJSON()">Copy to Clipboard</button>
+	</div>
+
+	<div class="main">
+		<!-- Source fields -->
+		<div class="panel" id="source-panel">
+			<div class="panel-header">
+				Source Fields
+				<span class="count" id="source-count">0 fields</span>
+			</div>
+			<div class="field-list" id="source-fields">
+				<div class="empty-state">Click "Discover" to load source fields</div>
+			</div>
+		</div>
+
+		<!-- Mappings -->
+		<div class="panel mapping-panel">
+			<div class="panel-header">
+				Field Mappings
+				<span class="count" id="mapping-count">0 mappings</span>
+			</div>
+			<div class="drop-zone" id="mapping-drop-zone">
+				Drop a source field here, then click a target field to map it
+			</div>
+			<div class="mapping-list" id="mapping-list"></div>
+		</div>
+
+		<!-- Target fields -->
+		<div class="panel" id="target-panel">
+			<div class="panel-header">
+				Target Fields
+				<span class="count" id="target-count">0 fields</span>
+			</div>
+			<div class="field-list" id="target-fields">
+				<div class="empty-state">Click "Discover" to load target fields</div>
+			</div>
+		</div>
+
+		<!-- JSON output -->
+		<div class="panel json-panel">
+			<div class="panel-header">MappingConfiguration</div>
+			<textarea id="json-output" placeholder='Click "Generate JSON" to produce the mapping configuration...'></textarea>
+		</div>
+	</div>
+
+	<script src="mapper.js"></script>
+</body>
+</html>

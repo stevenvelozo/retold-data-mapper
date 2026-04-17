@@ -1,0 +1,18 @@
+{
+	"Entity": "CityMetadata",
+	"GUIDName": "GUIDCityMetadata",
+	"GUIDTemplate": "CM_{~PascalCaseIdentifier:Record.CityName~}_{~D:Record.StateCode~}",
+
+	"_comment": "CityMetadata tracks which sources contributed data. In v1 this is seeded from demographics (the primary source) with HasDemographicData=1. A second pass from weather would set HasWeatherData=1, and a third from transit would set HasTransitData=1. The GUID matches the City entity's naming so they can be correlated.",
+
+	"Mappings":
+	{
+		"CityName": "{~D:Record.CityName~}",
+		"StateCode": "{~D:Record.StateCode~}",
+		"HasWeatherData": "0",
+		"HasDemographicData": "1",
+		"HasTransitData": "0",
+		"SourceCount": "1",
+		"DataQualityScore": "3.3"
+	}
+}

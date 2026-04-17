@@ -1,0 +1,17 @@
+{
+	"Entity": "City",
+	"GUIDName": "GUIDCity",
+	"GUIDTemplate": "City_{~PascalCaseIdentifier:Record.CityName~}_{~D:Record.StateCode~}",
+
+	"Mappings":
+	{
+		"CityName": "{~D:Record.CityName~}",
+		"StateCode": "{~D:Record.StateCode~}",
+		"Region": "{~D:Record.Region~}",
+		"Population": "{~D:Record.Population~}",
+		"AreaSqMiles": "{~D:Record.AreaSqMiles~}",
+		"PopDensity": "{~D:Record.PopDensity~}",
+		"FoundedYear": "{~D:Record.FoundedYear~}",
+		"MedianIncome": "{~D:Record.MedianIncome~}"
+	}
+}

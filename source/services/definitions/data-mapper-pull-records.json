@@ -1,0 +1,44 @@
+{
+	"Hash": "data-mapper-pull-records",
+	"Type": "data-mapper-pull-records",
+	"Name": "Pull Filtered Records",
+	"Description": "Reads records from a beacon entity with optional filtering. Emits one event per record, driving downstream mapping cards row by row.",
+	"Category": "data",
+	"Capability": "Data Mapper",
+	"Action": "PullRecords",
+	"Tier": "Engine",
+
+	"EventInputs": [
+		{ "Name": "Execute", "Description": "Begin pulling records from the source" },
+		{ "Name": "StepComplete", "Description": "Downstream finished processing the current record; advance to the next" }
+	],
+
+	"EventOutputs": [
+		{ "Name": "RecordAvailable", "Description": "A record is ready for processing" },
+		{ "Name": "AllRecordsPulled", "Description": "All records have been emitted and processed" },
+		{ "Name": "Error", "IsError": true, "Description": "Read failed" }
+	],
+
+	"SettingsInputs": [
+		{ "Name": "BeaconName", "DataType": "String", "Required": true, "Description": "Beacon name for mesh routing" },
+		{ "Name": "ConnectionHash", "DataType": "String", "Required": true, "Description": "URL-safe slug of the connection name" },
+		{ "Name": "Entity", "DataType": "String", "Required": true, "Description": "Table/entity name to read (e.g. Book)" },
+		{ "Name": "FilterExpression", "DataType": "String", "Required": false, "Description": "Filter expression (future: meadow filter syntax)" },
+		{ "Name": "BatchSize", "DataType": "Number", "Required": false, "Description": "Records per page (default 100)" }
+	],
+
+	"StateOutputs": [
+		{ "Name": "CurrentRecord", "DataType": "Object", "Description": "The current record being emitted" },
+		{ "Name": "RecordIndex", "DataType": "Number", "Description": "Zero-based index of current record" },
+		{ "Name": "TotalPulled", "DataType": "Number", "Description": "Total records read so far" },
+		{ "Name": "CompletedCount", "DataType": "Number", "Description": "Records whose downstream processing completed" }
+	],
+
+	"DefaultSettings": {
+		"BeaconName": "",
+		"ConnectionHash": "",
+		"Entity": "",
+		"FilterExpression": "",
+		"BatchSize": 100
+	}
+}

@@ -1,0 +1,14 @@
+{
+	"Entity": "WeatherSummary",
+	"GUIDName": "GUIDWeatherSummary",
+	"GUIDTemplate": "WS_{~PascalCaseIdentifier:Record.CityName~}_{~PascalCaseIdentifier:Record.StateName~}",
+
+	"_comment": "Sources from WeatherStation (which has CityName in 'City, ST' format + lat/lon). Temperature fields come from WeatherStation's Latitude/Longitude/Timezone for now; the actual weather readings would need a join or a second pass from the WeatherReading table. For v1, we map what's available on the station.",
+
+	"Mappings":
+	{
+		"CityName": "{~D:Record.CityName~}",
+		"StateCode": "{~D:Record.StateName~}",
+		"StationCount": "1"
+	}
+}

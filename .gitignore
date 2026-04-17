@@ -1,11 +1,13 @@
-.ultravisor*
+.data
 data
+documentation/source_research/
 package-lock.json
 
 # Test Environment
 debug/testenv
 debug/tmp
 debug/dist
+test/screenshots/
 
 # Quackage takes care of these for me!
 .babelrc
@@ -152,9 +154,3 @@ dist
 
 # Quackage takes care of these for me!
 *.quackage.bak
-
-# Docker image tarballs produced by docker-build-and-save.sh.
-# These are hundreds of MB each — never commit them.
-retold-stack-image*.tar
-retold-stack-image*.tar.gz
-*.tar.gz

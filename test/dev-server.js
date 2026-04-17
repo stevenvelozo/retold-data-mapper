@@ -55,6 +55,7 @@ const libUltravisorAPIServer = require('ultravisor/source/web_server/Ultravisor-
 const ULTRAVISOR_PORT = 18422;
 const SOURCE_BEACON_PORT = 18390;
 const TARGET_BEACON_PORT = 18391;
+const MAPPER_UI_PORT = 18400;
 
 const SOURCE_BEACON_NAME = 'source-beacon';
 const TARGET_BEACON_NAME = 'target-beacon';
@@ -160,6 +161,34 @@ function startUltravisor(fCallback)
 	_UltravisorFable.serviceManager.instantiateServiceProvider('UltravisorBeaconCoordinator');
 
 	_UltravisorFable.UltravisorTaskTypeRegistry.registerBuiltInTaskTypes();
+
+	// Register retold-data-mapper's custom task types
+	let libDataMapperTaskConfigs = require('../source/services/DataMapper-TaskConfigs.js');
+	let tmpRegistered = _UltravisorFable.UltravisorTaskTypeRegistry.registerTaskTypesFromConfigArray(libDataMapperTaskConfigs);
+	console.log(`        Registered ${tmpRegistered} Data Mapper task types.`);
+
+	// Load the sample Data Mapper operation into the Ultravisor
+	let tmpSampleOpPath = libPath.join(__dirname, '..', 'examples', 'sample-operation.json');
+	try
+	{
+		let tmpSampleOp = JSON.parse(libFs.readFileSync(tmpSampleOpPath, 'utf8'));
+		_UltravisorFable.UltravisorHypervisorState.updateOperation(tmpSampleOp,
+			(pOpError) =>
+			{
+				if (pOpError)
+				{
+					console.log(`        Sample operation load warning: ${pOpError.message}`);
+				}
+				else
+				{
+					console.log(`        Loaded sample operation: ${tmpSampleOp.Name} (${tmpSampleOp.Hash})`);
+				}
+			});
+	}
+	catch (pLoadError)
+	{
+		console.log(`        Sample operation not loaded: ${pLoadError.message}`);
+	}
 
 	_UltravisorFable.serviceManager.addServiceType('UltravisorAPIServer', libUltravisorAPIServer);
 	let tmpAPIServer = _UltravisorFable.serviceManager.instantiateServiceProvider('UltravisorAPIServer');
@@ -339,36 +368,75 @@ async function main()
 
 		await registerAndPinBeacons();
 
+		// Start the mapping editor static file server
+		let tmpWebAppPath = libPath.resolve(__dirname, '..', 'source', 'services', 'web-app', 'web');
+		let tmpHTTP = require('http');
+		let tmpMapperServer = tmpHTTP.createServer((pReq, pRes) =>
+		{
+			// CORS headers so the mapper UI can talk to beacons on other ports
+			pRes.setHeader('Access-Control-Allow-Origin', '*');
+			pRes.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+			pRes.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+			if (pReq.method === 'OPTIONS') { pRes.writeHead(200); pRes.end(); return; }
+
+			let tmpURL = pReq.url === '/' ? '/index.html' : pReq.url;
+			let tmpFilePath = libPath.join(tmpWebAppPath, tmpURL);
+			// Prevent path traversal
+			if (!tmpFilePath.startsWith(tmpWebAppPath)) { pRes.writeHead(403); pRes.end(); return; }
+
+			let tmpExtMap = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json' };
+			let tmpExt = libPath.extname(tmpFilePath);
+			let tmpContentType = tmpExtMap[tmpExt] || 'text/plain';
+
+			try
+			{
+				let tmpContent = libFs.readFileSync(tmpFilePath);
+				pRes.writeHead(200, { 'Content-Type': tmpContentType });
+				pRes.end(tmpContent);
+			}
+			catch (pError)
+			{
+				pRes.writeHead(404, { 'Content-Type': 'text/plain' });
+				pRes.end('Not found');
+			}
+		});
+		tmpMapperServer.listen(MAPPER_UI_PORT, () =>
+		{
+			console.log(`  Mapping Editor ready: http://localhost:${MAPPER_UI_PORT}/`);
+		});
+
+		// Also add CORS to both DataBeacon servers so the mapper UI can fetch schemas
+		[_SourceFable, _TargetFable].forEach((pFable) =>
+		{
+			if (pFable && pFable.OratorServiceServer && pFable.OratorServiceServer.server)
+			{
+				pFable.OratorServiceServer.server.pre((pReq, pRes, fNext) =>
+				{
+					pRes.header('Access-Control-Allow-Origin', '*');
+					pRes.header('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+					pRes.header('Access-Control-Allow-Headers', 'Content-Type');
+					if (pReq.method === 'OPTIONS') { pRes.send(200); return; }
+					fNext();
+				});
+			}
+		});
+
 		console.log('');
 		console.log('════════════════════════════════════════════════════════════');
 		console.log('  Ready!  Ctrl-C to stop.');
 		console.log('════════════════════════════════════════════════════════════');
 		console.log('');
-		console.log('  Web UIs (open in your browser):');
+		console.log('  Web UIs:');
+		console.log(`    Mapping Editor     http://localhost:${MAPPER_UI_PORT}/`);
 		console.log(`    Source DataBeacon   http://localhost:${SOURCE_BEACON_PORT}/`);
 		console.log(`    Target DataBeacon   http://localhost:${TARGET_BEACON_PORT}/`);
 		console.log(`    Ultravisor          http://localhost:${ULTRAVISOR_PORT}/`);
 		console.log('');
-		console.log('  In each DataBeacon web UI:');
-		console.log('    1. Click "Connections" → "+ New Connection"');
-		console.log('    2. Pick a DB type, fill in config, click "Test Connection"');
-		console.log('    3. Click "Save", then "Connect"');
-		console.log('    4. Click "Introspect" to discover tables');
-		console.log('    5. For each table you want, click "Enable Endpoints"');
-		console.log('       (On the TARGET beacon: the table must already exist in');
-		console.log('        the target DB — the mapper does not create schema.)');
-		console.log('');
-		console.log('  Beacon names (use these in your mapping config):');
-		console.log(`    Source.BeaconName  = "${SOURCE_BEACON_NAME}"`);
-		console.log(`    Target.BeaconName  = "${TARGET_BEACON_NAME}"`);
-		console.log('');
-		console.log('  Ultravisor URL (use in your mapping config):');
-		console.log(`    Ultravisor.URL     = "http://localhost:${ULTRAVISOR_PORT}"`);
-		console.log('');
-		console.log('  Sample mapping config: examples/bookstore-sync.json');
-		console.log('  Run the mapper:');
-		console.log('    ./bin/retold-data-mapper.js --config my-mapping.json --dry-run');
-		console.log('    ./bin/retold-data-mapper.js --config my-mapping.json --run');
+		console.log('  Workflow:');
+		console.log('    1. Configure connections in each DataBeacon web UI');
+		console.log('    2. Open the Mapping Editor to visually map fields');
+		console.log('    3. Copy the generated JSON into your operation config');
+		console.log('    4. Run: ./bin/retold-data-mapper.js -u http://localhost:18422');
 		console.log('');
 	}
 	catch (pError)

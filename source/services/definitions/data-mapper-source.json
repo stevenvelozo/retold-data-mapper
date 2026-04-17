@@ -1,0 +1,35 @@
+{
+	"Hash": "data-mapper-source",
+	"Type": "data-mapper-source",
+	"Name": "Data Source",
+	"Description": "References a DataBeacon connection. Introspects the schema so downstream cards know available tables and columns.",
+	"Category": "data",
+	"Capability": "Data Mapper",
+	"Action": "IntrospectSource",
+	"Tier": "Engine",
+
+	"EventInputs": [
+		{ "Name": "Execute", "Description": "Introspect the beacon connection" }
+	],
+
+	"EventOutputs": [
+		{ "Name": "Complete", "Description": "Schema introspected successfully" },
+		{ "Name": "Error", "IsError": true, "Description": "Introspection failed" }
+	],
+
+	"SettingsInputs": [
+		{ "Name": "BeaconName", "DataType": "String", "Required": true, "Description": "Beacon name (AffinityKey) for mesh routing" },
+		{ "Name": "IDBeaconConnection", "DataType": "Number", "Required": true, "Description": "Connection ID on the target beacon" }
+	],
+
+	"StateOutputs": [
+		{ "Name": "Schema", "DataType": "Object", "Description": "Introspected schema: { Tables: [{ TableName, Columns }] }" },
+		{ "Name": "ConnectionHash", "DataType": "String", "Description": "URL-safe slug of the connection name (for MeadowProxy paths)" },
+		{ "Name": "TableCount", "DataType": "Number", "Description": "Number of tables discovered" }
+	],
+
+	"DefaultSettings": {
+		"BeaconName": "",
+		"IDBeaconConnection": 1
+	}
+}

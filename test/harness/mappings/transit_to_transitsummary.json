@@ -1,0 +1,18 @@
+{
+	"Entity": "TransitSummary",
+	"GUIDName": "GUIDTransitSummary",
+	"GUIDTemplate": "TS_{~PascalCaseIdentifier:Record.CityServed~}_{~D:Record.StateCode~}",
+
+	"_comment": "TransitSystem.CityServed is sometimes abbreviated ('LA', 'CHI', 'NYC'). The GUID uses PascalCaseIdentifier which normalizes case. For true correlation with the City entity, a downstream pass or Solver would resolve abbreviations to canonical names. For v1, we store the raw CityServed and rely on StateCode for matching.",
+
+	"Mappings":
+	{
+		"CityName": "{~D:Record.CityServed~}",
+		"StateCode": "{~D:Record.StateCode~}",
+		"PrimarySystemName": "{~D:Record.SystemName~}",
+		"SystemType": "{~D:Record.SystemType~}",
+		"TotalRoutes": "{~D:Record.TotalRoutes~}",
+		"DailyRidership": "{~D:Record.DailyRidership~}",
+		"AnnualBudgetMillions": "{~D:Record.AnnualBudgetMillions~}"
+	}
+}

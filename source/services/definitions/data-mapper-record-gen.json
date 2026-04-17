@@ -1,0 +1,39 @@
+{
+	"Hash": "data-mapper-record-gen",
+	"Type": "data-mapper-record-gen",
+	"Name": "Record Generation",
+	"Description": "Maps a single source record to a target record using field mappings and template expressions. The core mapping card.",
+	"Category": "data",
+	"Capability": "Data Mapper",
+	"Action": "MapRecord",
+	"Tier": "Engine",
+
+	"EventInputs": [
+		{ "Name": "MapRecord", "Description": "Transform the incoming source record" }
+	],
+
+	"EventOutputs": [
+		{ "Name": "RecordMapped", "Description": "Target record generated successfully" },
+		{ "Name": "Error", "IsError": true, "Description": "Mapping failed" }
+	],
+
+	"SettingsInputs": [
+		{ "Name": "SourceRecord", "DataType": "Object", "Required": true, "Description": "The source record to transform (wired from Pull Filtered Records.CurrentRecord)" },
+		{ "Name": "MappingConfiguration", "DataType": "Object", "Required": true, "Description": "Field mapping rules: { Entity, Mappings: { Target: \"{~D:Record.Source~}\" }, GUIDTemplate, Solvers }" }
+	],
+
+	"StateOutputs": [
+		{ "Name": "MappedRecord", "DataType": "Object", "Description": "The transformed target record" },
+		{ "Name": "SourceRecord", "DataType": "Object", "Description": "Echo of the source record (for downstream reference)" }
+	],
+
+	"DefaultSettings": {
+		"SourceRecord": {},
+		"MappingConfiguration": {
+			"Entity": "",
+			"Mappings": {},
+			"GUIDTemplate": "",
+			"Solvers": []
+		}
+	}
+}

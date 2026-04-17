@@ -1,0 +1,173 @@
+{
+	"Hash": "data-mapper-bookstore-sync",
+	"Name": "Bookstore Book → MappedBook Sync",
+	"Description": "Reads Book records from source MSSQL beacon, maps fields to MappedBook schema, writes to target PostgreSQL beacon.",
+	"Tags": ["data-mapper", "bookstore", "sync"],
+	"Author": "retold-data-mapper",
+	"Version": "1.0.0",
+
+	"Graph": {
+		"Nodes": [
+			{
+				"Hash": "start",
+				"Type": "start",
+				"X": 50,
+				"Y": 200,
+				"Width": 100,
+				"Height": 60,
+				"Title": "Start",
+				"Ports": [
+					{ "Hash": "start-eo-out", "Direction": "output", "Side": "right-bottom" }
+				]
+			},
+			{
+				"Hash": "source",
+				"Type": "data-mapper-source",
+				"X": 220,
+				"Y": 180,
+				"Width": 200,
+				"Height": 120,
+				"Title": "MSSQL Source",
+				"Ports": [
+					{ "Hash": "source-ei-Execute", "Direction": "input", "Side": "left-bottom", "Label": "Execute" },
+					{ "Hash": "source-eo-Complete", "Direction": "output", "Side": "right-bottom", "Label": "Complete" },
+					{ "Hash": "source-so-Schema", "Direction": "output", "Side": "right-top", "Label": "Schema" },
+					{ "Hash": "source-so-ConnectionHash", "Direction": "output", "Side": "right-top", "Label": "ConnectionHash" }
+				],
+				"Data": {
+					"BeaconName": "source-beacon",
+					"IDBeaconConnection": 1
+				}
+			},
+			{
+				"Hash": "pull",
+				"Type": "data-mapper-pull-records",
+				"X": 490,
+				"Y": 160,
+				"Width": 220,
+				"Height": 140,
+				"Title": "Pull Book Records",
+				"Ports": [
+					{ "Hash": "pull-ei-Execute", "Direction": "input", "Side": "left-bottom", "Label": "Execute" },
+					{ "Hash": "pull-ei-StepComplete", "Direction": "input", "Side": "bottom", "Label": "StepComplete" },
+					{ "Hash": "pull-eo-RecordAvailable", "Direction": "output", "Side": "right-bottom", "Label": "RecordAvailable" },
+					{ "Hash": "pull-eo-AllRecordsPulled", "Direction": "output", "Side": "bottom-right", "Label": "AllRecordsPulled" },
+					{ "Hash": "pull-so-CurrentRecord", "Direction": "output", "Side": "right-top", "Label": "CurrentRecord" }
+				],
+				"Data": {
+					"BeaconName": "source-beacon",
+					"ConnectionHash": "bookstore-mssql",
+					"Entity": "Book",
+					"BatchSize": 100
+				}
+			},
+			{
+				"Hash": "map",
+				"Type": "data-mapper-record-gen",
+				"X": 790,
+				"Y": 140,
+				"Width": 220,
+				"Height": 120,
+				"Title": "Map Book → MappedBook",
+				"Ports": [
+					{ "Hash": "map-ei-MapRecord", "Direction": "input", "Side": "left-bottom", "Label": "MapRecord" },
+					{ "Hash": "map-eo-RecordMapped", "Direction": "output", "Side": "right-bottom", "Label": "RecordMapped" },
+					{ "Hash": "map-si-SourceRecord", "Direction": "input", "Side": "left-top", "Label": "SourceRecord" },
+					{ "Hash": "map-so-MappedRecord", "Direction": "output", "Side": "right-top", "Label": "MappedRecord" }
+				],
+				"Data": {
+					"MappingConfiguration": {
+						"Entity": "MappedBook",
+						"GUIDTemplate": "MappedBook-{~D:Record.GUIDBook~}",
+						"GUIDName": "GUIDMappedBook",
+						"Mappings": {
+							"BookTitle": "{~D:Record.Title~}",
+							"BookISBN": "{~D:Record.ISBN~}",
+							"BookGenre": "{~D:Record.Genre~}",
+							"BookLanguage": "{~D:Record.Language~}",
+							"BookYear": "{~D:Record.PublicationYear~}"
+						},
+						"Solvers": []
+					}
+				}
+			},
+			{
+				"Hash": "accum",
+				"Type": "data-mapper-comprehension",
+				"X": 1090,
+				"Y": 160,
+				"Width": 200,
+				"Height": 120,
+				"Title": "Accumulate MappedBook",
+				"Ports": [
+					{ "Hash": "accum-ei-AddRecord", "Direction": "input", "Side": "left-bottom", "Label": "AddRecord" },
+					{ "Hash": "accum-ei-Finalize", "Direction": "input", "Side": "bottom", "Label": "Finalize" },
+					{ "Hash": "accum-eo-RecordAdded", "Direction": "output", "Side": "right-bottom", "Label": "RecordAdded" },
+					{ "Hash": "accum-eo-Complete", "Direction": "output", "Side": "right", "Label": "Complete" },
+					{ "Hash": "accum-si-MappedRecord", "Direction": "input", "Side": "left-top", "Label": "MappedRecord" },
+					{ "Hash": "accum-so-Comprehension", "Direction": "output", "Side": "right-top", "Label": "Comprehension" }
+				],
+				"Data": {
+					"Entity": "MappedBook",
+					"GUIDField": "GUIDMappedBook"
+				}
+			},
+			{
+				"Hash": "write",
+				"Type": "data-mapper-write-target",
+				"X": 1370,
+				"Y": 180,
+				"Width": 220,
+				"Height": 120,
+				"Title": "Write to Target PG",
+				"Ports": [
+					{ "Hash": "write-ei-Execute", "Direction": "input", "Side": "left-bottom", "Label": "Execute" },
+					{ "Hash": "write-eo-Complete", "Direction": "output", "Side": "right-bottom", "Label": "Complete" },
+					{ "Hash": "write-si-Comprehension", "Direction": "input", "Side": "left-top", "Label": "Comprehension" }
+				],
+				"Data": {
+					"BeaconName": "target-beacon",
+					"ConnectionHash": "target-pg",
+					"Entity": "MappedBook",
+					"SyncMode": "InsertOnly"
+				}
+			},
+			{
+				"Hash": "end",
+				"Type": "end",
+				"X": 1660,
+				"Y": 220,
+				"Width": 100,
+				"Height": 60,
+				"Title": "End",
+				"Ports": [
+					{ "Hash": "end-ei-in", "Direction": "input", "Side": "left-bottom" }
+				]
+			}
+		],
+
+		"Connections": [
+			{ "SourceNodeHash": "start", "SourcePortHash": "start-eo-out", "TargetNodeHash": "source", "TargetPortHash": "source-ei-Execute" },
+
+			{ "SourceNodeHash": "source", "SourcePortHash": "source-eo-Complete", "TargetNodeHash": "pull", "TargetPortHash": "pull-ei-Execute" },
+
+			{ "SourceNodeHash": "pull", "SourcePortHash": "pull-eo-RecordAvailable", "TargetNodeHash": "map", "TargetPortHash": "map-ei-MapRecord" },
+
+			{ "SourceNodeHash": "pull", "SourcePortHash": "pull-so-CurrentRecord", "TargetNodeHash": "map", "TargetPortHash": "map-si-SourceRecord", "ConnectionType": "State" },
+
+			{ "SourceNodeHash": "map", "SourcePortHash": "map-eo-RecordMapped", "TargetNodeHash": "accum", "TargetPortHash": "accum-ei-AddRecord" },
+
+			{ "SourceNodeHash": "map", "SourcePortHash": "map-so-MappedRecord", "TargetNodeHash": "accum", "TargetPortHash": "accum-si-MappedRecord", "ConnectionType": "State" },
+
+			{ "SourceNodeHash": "accum", "SourcePortHash": "accum-eo-RecordAdded", "TargetNodeHash": "pull", "TargetPortHash": "pull-ei-StepComplete" },
+
+			{ "SourceNodeHash": "pull", "SourcePortHash": "pull-eo-AllRecordsPulled", "TargetNodeHash": "accum", "TargetPortHash": "accum-ei-Finalize" },
+
+			{ "SourceNodeHash": "accum", "SourcePortHash": "accum-eo-Complete", "TargetNodeHash": "write", "TargetPortHash": "write-ei-Execute" },
+
+			{ "SourceNodeHash": "accum", "SourcePortHash": "accum-so-Comprehension", "TargetNodeHash": "write", "TargetPortHash": "write-si-Comprehension", "ConnectionType": "State" },
+
+			{ "SourceNodeHash": "write", "SourcePortHash": "write-eo-Complete", "TargetNodeHash": "end", "TargetPortHash": "end-ei-in" }
+		]
+	}
+}

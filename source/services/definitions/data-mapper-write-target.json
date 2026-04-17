@@ -1,0 +1,43 @@
+{
+	"Hash": "data-mapper-write-target",
+	"Type": "data-mapper-write-target",
+	"Name": "Write to Target Beacon",
+	"Description": "Writes a comprehension (or batch of records) to a target entity on another DataBeacon via the Ultravisor mesh.",
+	"Category": "data",
+	"Capability": "Data Mapper",
+	"Action": "WriteTarget",
+	"Tier": "Engine",
+
+	"EventInputs": [
+		{ "Name": "Execute", "Description": "Write the comprehension to the target beacon" }
+	],
+
+	"EventOutputs": [
+		{ "Name": "Complete", "Description": "All records written" },
+		{ "Name": "Error", "IsError": true, "Description": "Write failed" }
+	],
+
+	"SettingsInputs": [
+		{ "Name": "BeaconName", "DataType": "String", "Required": true, "Description": "Target beacon name for mesh routing" },
+		{ "Name": "ConnectionHash", "DataType": "String", "Required": true, "Description": "URL-safe slug of the target connection name" },
+		{ "Name": "Entity", "DataType": "String", "Required": true, "Description": "Target entity name (e.g. MappedBook)" },
+		{ "Name": "Comprehension", "DataType": "Object", "Required": true, "Description": "Comprehension to write: { Entity: { GUID: record, ... } }" },
+		{ "Name": "SyncMode", "DataType": "String", "Required": false, "Description": "InsertOnly (default) or Upsert" },
+		{ "Name": "IdentityField", "DataType": "String", "Required": false, "Description": "Field for Upsert identity matching" }
+	],
+
+	"StateOutputs": [
+		{ "Name": "Written", "DataType": "Number", "Description": "Count of records written" },
+		{ "Name": "Errors", "DataType": "Number", "Description": "Count of write errors" },
+		{ "Name": "ErrorLog", "DataType": "Array", "Description": "Error details" }
+	],
+
+	"DefaultSettings": {
+		"BeaconName": "",
+		"ConnectionHash": "",
+		"Entity": "",
+		"Comprehension": {},
+		"SyncMode": "InsertOnly",
+		"IdentityField": ""
+	}
+}
