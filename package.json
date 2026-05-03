@@ -14,7 +14,17 @@
 		"harness": "node test/harness/run-harness.js",
 		"build": "npx quack build",
 		"test": "npx quack test",
-		"coverage": "npx quack coverage"
+		"coverage": "npx quack coverage",
+		"prepublishOnly": "npm test",
+		"postversion": "npx quack release postversion",
+		"postpublish": "npx quack release postpublish",
+		"publish:docker": "npx quack release publish --image",
+		"release:patch": "npx quack release patch",
+		"release:minor": "npx quack release minor",
+		"release:major": "npx quack release major",
+		"release:patch:image": "npx quack release patch --image",
+		"release:minor:image": "npx quack release minor --image",
+		"release:major:image": "npx quack release major --image"
 	},
 	"mocha": {
 		"spec": "test/DataMapper_tests.js",
