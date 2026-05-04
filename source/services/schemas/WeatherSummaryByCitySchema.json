@@ -1,0 +1,47 @@
+{
+	"_comment": "Aggregation result: one row per (StateName, CityName) summarizing the city's monthly readings (avg/max/min temperature, total precipitation, reading count).",
+	"SchemaName": "weather-summary-by-city",
+	"Version": 1,
+	"Tables":
+	[
+		{
+			"Scope": "WeatherSummaryByCity",
+			"DefaultIdentifier": "IDWeatherSummaryByCity",
+			"Domain": "Default",
+			"Schema":
+			[
+				{ "Column": "IDWeatherSummaryByCity",   "Type": "AutoIdentity", "Size": "Default" },
+				{ "Column": "GUIDWeatherSummaryByCity", "Type": "AutoGUID",     "Size": "255" },
+				{ "Column": "CreateDate",   "Type": "CreateDate",   "Size": "Default" },
+				{ "Column": "CreatingIDUser","Type": "CreateIDUser","Size": "int" },
+				{ "Column": "UpdateDate",   "Type": "UpdateDate",   "Size": "Default" },
+				{ "Column": "UpdatingIDUser","Type": "UpdateIDUser","Size": "int" },
+				{ "Column": "Deleted",      "Type": "Deleted",      "Size": "Default" },
+				{ "Column": "DeleteDate",   "Type": "DeleteDate",   "Size": "Default" },
+				{ "Column": "DeletingIDUser","Type": "DeleteIDUser","Size": "int" },
+				{ "Column": "CityName",        "Type": "String",  "Size": "128" },
+				{ "Column": "StateName",       "Type": "String",  "Size": "64"  },
+				{ "Column": "AvgTempF",        "Type": "Decimal", "Size": "6,2" },
+				{ "Column": "MaxTempF",        "Type": "Decimal", "Size": "6,2" },
+				{ "Column": "MinTempF",        "Type": "Decimal", "Size": "6,2" },
+				{ "Column": "TotalPrecip",     "Type": "Decimal", "Size": "8,2" },
+				{ "Column": "ReadingCount",    "Type": "Integer", "Size": "int" }
+			],
+			"DefaultObject":
+			{
+				"IDWeatherSummaryByCity": 0,
+				"GUIDWeatherSummaryByCity": "0x0000000000000000",
+				"CreateDate": null, "CreatingIDUser": 0,
+				"UpdateDate": null, "UpdatingIDUser": 0,
+				"Deleted": false, "DeleteDate": null, "DeletingIDUser": 0,
+				"CityName": "", "StateName": "",
+				"AvgTempF": 0, "MaxTempF": 0, "MinTempF": 0,
+				"TotalPrecip": 0, "ReadingCount": 0
+			},
+			"Indexes":
+			[
+				{ "Name": "UX_WeatherSummaryByCity_GUID", "Columns": ["GUIDWeatherSummaryByCity"], "Unique": true }
+			]
+		}
+	]
+}

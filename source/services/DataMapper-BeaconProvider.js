@@ -8,7 +8,11 @@
  * Capabilities:
  *   DataMapperSource:IntrospectSource     — introspect a beacon connection
  *   DataMapperRecords:PullRecords         — read all records from a beacon entity
- *   DataMapperTransform:MapRecords        — apply MappingConfiguration to a batch of records
+ *   DataMapperTransform:MapRecords          — apply MappingConfiguration to a batch of records
+ *   DataMapperTransform:ExtractRecords      — Phase 2b Extraction: filter + project a batch
+ *   DataMapperTransform:AggregateRecords    — Phase 2b Aggregation: Sum/Count/Mean/Min/Max grouped by keys
+ *   DataMapperTransform:HistogramRecords    — Phase 2b Histogram: bucket + aggregate per bucket
+ *   DataMapperTransform:IntersectRecords    — Phase 2b Intersection: in-memory join Source × Related, OrderBy + Limit
  *   DataMapperTransform:BuildComprehension — accumulate records into a comprehension
  *   DataMapperRecords:WriteRecords        — write records to a target beacon entity
  *
@@ -576,6 +580,608 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						}
 					},
 
+					'ExtractRecords':
+					{
+						Description: 'Filter + project a record set (Phase 2b Extraction). Drops rows that do not match every Filter equality, then applies Projection like a MappingConfiguration. Lives as its own beacon action so per-row Filter rejects and Projection errors attribute to this node in the manifest.',
+						SettingsSchema:
+						[
+							{ Name: 'Records',                DataType: 'Array',  Required: true,  Description: 'Source records (typically from a preceding PullRecords).' },
+							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true,  Description: '{ Entity, GUIDName?, GUIDTemplate?, Projection, Filter? }. Bundled into one Object-typed setting so UV\'s settings resolver does not strip {~D:Record.X~} templates inside GUIDTemplate / Projection — string-typed settings are template-resolved before reaching the handler.' }
+						],
+						Handler: function (pWorkItem, pContext, fHandlerCallback)
+						{
+							let tmpSettings = pWorkItem.Settings || {};
+							let tmpRecords = tmpSettings.Records || [];
+							let tmpCfg = tmpSettings.OperationConfiguration || {};
+
+							if (typeof (tmpRecords) === 'string')
+							{
+								try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { tmpFable.log.error(`ExtractRecords: Records parse error: ${e.message}`); tmpRecords = []; }
+							}
+							if (typeof (tmpCfg) === 'string')
+							{
+								try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpFable.log.error(`ExtractRecords: OperationConfiguration parse error: ${e.message}`); tmpCfg = {}; }
+							}
+
+							let tmpEntity = tmpCfg.Entity || 'Record';
+							let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+							let tmpGUIDTemplate = tmpCfg.GUIDTemplate || '';
+							let tmpProjection = tmpCfg.Projection || {};
+							let tmpFilter = tmpCfg.Filter || null;
+
+							if (!Array.isArray(tmpRecords))
+							{
+								return fHandlerCallback(null, {
+									Outputs: { Records: [], Result: '[]', RecordCount: 0, FilteredOutCount: 0, Errors: [] },
+									Log: [`ExtractRecords: input Records was not an array (got ${typeof(tmpRecords)}).`]
+								});
+							}
+
+							// Build a MappingConfiguration the existing template
+							// machinery already understands. The compiler in
+							// the bridge funnels Projection straight in as
+							// Mappings, so the per-cell template grammar is
+							// identical to MapRecords' (incl. {~D:Record.X~}).
+							let tmpMappingConfig =
+							{
+								Entity:       tmpEntity,
+								GUIDName:     tmpGUIDName,
+								GUIDTemplate: tmpGUIDTemplate,
+								Mappings:     tmpProjection,
+								Solvers:      []
+							};
+
+							// Same TabularTransform availability check as
+							// MapRecords. The transform path includes
+							// GUIDTemplate resolution; the lightweight fallback
+							// also handles it (block below) so the two paths
+							// produce equivalent rows.
+							let tmpTransform = null;
+							if (libTabularTransform && typeof (tmpFable.parseTemplate) === 'function')
+							{
+								tmpFable.serviceManager.addServiceTypeIfNotExists('TabularTransform', libTabularTransform);
+								tmpTransform = tmpFable.serviceManager.instantiateServiceProviderIfNotExists('TabularTransform');
+							}
+
+							let tmpKept = [];
+							let tmpFilteredOut = 0;
+							let tmpErrors = [];
+							let tmpFilterKeys = (tmpFilter && typeof (tmpFilter) === 'object') ? Object.keys(tmpFilter) : [];
+
+							for (let i = 0; i < tmpRecords.length; i++)
+							{
+								let tmpRow = tmpRecords[i];
+
+								// Step 1 — filter. Equality with == fallback
+								// (so 1 matches "1" — meadow's REST returns
+								// numeric columns as numbers but we sometimes
+								// receive them as strings via JSON re-parse).
+								let tmpKeep = true;
+								for (let f = 0; f < tmpFilterKeys.length; f++)
+								{
+									let tmpKey = tmpFilterKeys[f];
+									let tmpExpected = tmpFilter[tmpKey];
+									let tmpActual = tmpRow ? tmpRow[tmpKey] : undefined;
+									if (tmpActual !== tmpExpected && String(tmpActual) !== String(tmpExpected))
+									{
+										tmpKeep = false;
+										break;
+									}
+								}
+								if (!tmpKeep)
+								{
+									tmpFilteredOut++;
+									continue;
+								}
+
+								// Step 2 — project. Same path MapRecords uses,
+								// so per-row error attribution and template
+								// semantics stay consistent with Mapping.
+								try
+								{
+									let tmpProjected;
+									if (tmpTransform && typeof (tmpTransform.createRecordFromMapping) === 'function')
+									{
+										tmpProjected = tmpTransform.createRecordFromMapping(tmpRow, tmpMappingConfig, {});
+									}
+									else
+									{
+										tmpProjected = {};
+										let tmpKeys = Object.keys(tmpProjection);
+										for (let k = 0; k < tmpKeys.length; k++)
+										{
+											let tmpExpr = tmpProjection[tmpKeys[k]];
+											if (typeof (tmpExpr) === 'string')
+											{
+												let tmpMatch = tmpExpr.match(/\{~D:Record\.(\w+)~\}/);
+												if (tmpMatch)
+												{
+													tmpProjected[tmpKeys[k]] = tmpRow[tmpMatch[1]];
+												}
+												else if (tmpRow.hasOwnProperty(tmpExpr))
+												{
+													tmpProjected[tmpKeys[k]] = tmpRow[tmpExpr];
+												}
+												else
+												{
+													tmpProjected[tmpKeys[k]] = tmpExpr;
+												}
+											}
+											else
+											{
+												tmpProjected[tmpKeys[k]] = tmpExpr;
+											}
+										}
+										// Lightweight GUIDTemplate resolution:
+										// substitute every {~D:Record.X~} for
+										// the source row's value. Whatever
+										// chars are around them stay literal,
+										// so "WSC_42" comes out of "WSC_{~D:Record.IDWeatherStation~}".
+										if (tmpGUIDTemplate)
+										{
+											tmpProjected[tmpGUIDName] = tmpGUIDTemplate.replace(
+												/\{~D:Record\.(\w+)~\}/g,
+												(pMatch, pField) => (tmpRow[pField] === undefined || tmpRow[pField] === null) ? '' : String(tmpRow[pField]));
+										}
+									}
+									tmpKept.push(tmpProjected);
+								}
+								catch (pProjErr)
+								{
+									tmpErrors.push({ Index: i, Error: pProjErr.message });
+									if (tmpErrors.length === 1)
+									{
+										tmpFable.log.error(`ExtractRecords: first projection error at index ${i}: ${pProjErr.message}`);
+									}
+								}
+							}
+
+							return fHandlerCallback(null, {
+								Outputs:
+								{
+									Records:          tmpKept,
+									RecordCount:      tmpKept.length,
+									FilteredOutCount: tmpFilteredOut,
+									Errors:           tmpErrors,
+									Result:           JSON.stringify(tmpKept)
+								},
+								Log: [`ExtractRecords: kept ${tmpKept.length} of ${tmpRecords.length} (filtered out ${tmpFilteredOut}, errors ${tmpErrors.length}).`]
+							});
+						}
+					},
+
+					'AggregateRecords':
+					{
+						Description: 'Group records by GroupBy keys, compute aggregates (Sum / Count / Mean / Min / Max) per group, project a deterministic GUID per group. Output is one record per unique GroupBy combination, with columns = GroupBy ∪ Aggregates.As ∪ GUID.',
+						SettingsSchema:
+						[
+							{ Name: 'Records',                DataType: 'Array',  Required: true, Description: 'Source records (typically from upstream PullRecords).' },
+							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true, Description: '{ Entity, GUIDName?, GUIDTemplate?, GroupBy:[fields], Aggregates:[{Source,Function,As}], IncludeGroupColumns? (default true) }. Bundled as one Object so UV does not template-strip GUIDTemplate / inner expressions.' }
+						],
+						Handler: function (pWorkItem, pContext, fHandlerCallback)
+						{
+							let tmpSettings = pWorkItem.Settings || {};
+							let tmpRecords = tmpSettings.Records || [];
+							let tmpCfg = tmpSettings.OperationConfiguration || {};
+							if (typeof (tmpRecords) === 'string') { try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { tmpRecords = []; } }
+							if (typeof (tmpCfg)     === 'string') { try { tmpCfg     = JSON.parse(tmpCfg);     } catch (e) { tmpCfg = {}; } }
+
+							let tmpEntity = tmpCfg.Entity || 'Aggregate';
+							let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+							let tmpGUIDTemplate = tmpCfg.GUIDTemplate || '';
+							let tmpGroupBy = Array.isArray(tmpCfg.GroupBy) ? tmpCfg.GroupBy : [];
+							let tmpAggs = Array.isArray(tmpCfg.Aggregates) ? tmpCfg.Aggregates : [];
+							let tmpIncludeGroupCols = (tmpCfg.IncludeGroupColumns === undefined) ? true : !!tmpCfg.IncludeGroupColumns;
+
+							if (!Array.isArray(tmpRecords))
+							{
+								return fHandlerCallback(null, {
+									Outputs: { Records: [], RecordCount: 0, GroupCount: 0, Result: '[]' },
+									Log: [`AggregateRecords: input Records was not an array.`]
+								});
+							}
+
+							// Build groups keyed by joined GroupBy values. The
+							// key is a JSON-encoded array of values so collisions
+							// across distinct value combinations are impossible
+							// (e.g. ["NY","NewYork"] vs ["NYNewYork"] both
+							// hashable but distinct here).
+							let tmpGroups = {};
+							for (let i = 0; i < tmpRecords.length; i++)
+							{
+								let tmpRow = tmpRecords[i];
+								if (!tmpRow) continue;
+								let tmpKeyVals = [];
+								for (let g = 0; g < tmpGroupBy.length; g++)
+								{
+									let tmpVal = tmpRow[tmpGroupBy[g]];
+									tmpKeyVals.push(tmpVal === undefined ? null : tmpVal);
+								}
+								let tmpKey = JSON.stringify(tmpKeyVals);
+								if (!tmpGroups[tmpKey]) tmpGroups[tmpKey] = { Key: tmpKeyVals, Rows: [], Sample: tmpRow };
+								tmpGroups[tmpKey].Rows.push(tmpRow);
+							}
+
+							let tmpOut = [];
+							let tmpGroupKeys = Object.keys(tmpGroups);
+							for (let k = 0; k < tmpGroupKeys.length; k++)
+							{
+								let tmpGroup = tmpGroups[tmpGroupKeys[k]];
+								let tmpResult = {};
+
+								if (tmpIncludeGroupCols)
+								{
+									for (let g = 0; g < tmpGroupBy.length; g++)
+									{
+										tmpResult[tmpGroupBy[g]] = tmpGroup.Key[g];
+									}
+								}
+
+								for (let a = 0; a < tmpAggs.length; a++)
+								{
+									let tmpAgg = tmpAggs[a];
+									let tmpFn = String(tmpAgg.Function || tmpAgg.Op || '').toLowerCase();
+									let tmpSrc = tmpAgg.Source || tmpAgg.Column;
+									let tmpAs = tmpAgg.As || (tmpFn + '_' + (tmpSrc || 'col'));
+									let tmpVals = [];
+									for (let r = 0; r < tmpGroup.Rows.length; r++)
+									{
+										let tmpV = (tmpSrc === '*' || !tmpSrc) ? 1 : tmpGroup.Rows[r][tmpSrc];
+										// Coerce stringified numbers (postgres numeric returns strings via meadow REST)
+										if (typeof tmpV === 'string' && tmpV !== '' && !isNaN(Number(tmpV))) tmpV = Number(tmpV);
+										if (tmpV === undefined || tmpV === null) continue;
+										tmpVals.push(tmpV);
+									}
+									let tmpAggValue = null;
+									switch (tmpFn)
+									{
+										case 'count':
+											tmpAggValue = (tmpSrc === '*' || !tmpSrc) ? tmpGroup.Rows.length : tmpVals.length;
+											break;
+										case 'sum':
+											tmpAggValue = tmpVals.reduce((s, v) => s + Number(v), 0);
+											break;
+										case 'mean': case 'avg': case 'average':
+											tmpAggValue = tmpVals.length === 0 ? null : tmpVals.reduce((s, v) => s + Number(v), 0) / tmpVals.length;
+											if (tmpAggValue !== null) tmpAggValue = Math.round(tmpAggValue * 100) / 100;
+											break;
+										case 'min':
+											tmpAggValue = tmpVals.length === 0 ? null : tmpVals.reduce((m, v) => Number(v) < m ? Number(v) : m, Number(tmpVals[0]));
+											break;
+										case 'max':
+											tmpAggValue = tmpVals.length === 0 ? null : tmpVals.reduce((m, v) => Number(v) > m ? Number(v) : m, Number(tmpVals[0]));
+											break;
+										default:
+											tmpAggValue = null;
+									}
+									tmpResult[tmpAs] = tmpAggValue;
+								}
+
+								// Resolve GUIDTemplate against the group's first
+								// row (Sample) — group columns and any other
+								// stable-per-group column on Sample work as
+								// substitution sources. Aggregates are also in
+								// scope via tmpResult so a template can reference
+								// {~D:Result.AvgTempF~} too.
+								if (tmpGUIDTemplate)
+								{
+									tmpResult[tmpGUIDName] = tmpGUIDTemplate.replace(
+										/\{~D:Record\.(\w+)~\}/g,
+										(_m, pField) =>
+										{
+											let tmpV = tmpGroup.Sample[pField];
+											if (tmpV === undefined && tmpResult.hasOwnProperty(pField)) tmpV = tmpResult[pField];
+											return (tmpV === undefined || tmpV === null) ? '' : String(tmpV).replace(/[^A-Za-z0-9]/g, '');
+										});
+								}
+
+								tmpOut.push(tmpResult);
+							}
+
+							return fHandlerCallback(null, {
+								Outputs:
+								{
+									Records:     tmpOut,
+									RecordCount: tmpOut.length,
+									GroupCount:  tmpOut.length,
+									Result:      JSON.stringify(tmpOut)
+								},
+								Log: [`AggregateRecords: ${tmpRecords.length} input rows → ${tmpOut.length} groups across ${tmpGroupBy.length} GroupBy field(s) and ${tmpAggs.length} aggregate(s).`]
+							});
+						}
+					},
+
+					'HistogramRecords':
+					{
+						Description: 'Bucket records by a column (DateMonth / DateDay / DateYear / NumericRange) with optional secondary GroupBy, then compute aggregates per bucket × group. Output is one record per (Bucket, GroupBy) combination.',
+						SettingsSchema:
+						[
+							{ Name: 'Records',                DataType: 'Array',  Required: true, Description: 'Source records (typically from upstream PullRecords).' },
+							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true, Description: '{ Entity, GUIDName?, GUIDTemplate?, BucketColumn, BucketKind: "DateMonth"|"DateDay"|"DateYear"|"NumericRange", BucketSize? (NumericRange only), GroupBy?:[], Aggregates:[{Source,Function,As}], BucketAs? (default "Bucket") }. Bundled to dodge UV template stripping.' }
+						],
+						Handler: function (pWorkItem, pContext, fHandlerCallback)
+						{
+							let tmpSettings = pWorkItem.Settings || {};
+							let tmpRecords = tmpSettings.Records || [];
+							let tmpCfg = tmpSettings.OperationConfiguration || {};
+							if (typeof (tmpRecords) === 'string') { try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { tmpRecords = []; } }
+							if (typeof (tmpCfg)     === 'string') { try { tmpCfg     = JSON.parse(tmpCfg);     } catch (e) { tmpCfg = {}; } }
+
+							let tmpEntity = tmpCfg.Entity || 'Histogram';
+							let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+							let tmpGUIDTemplate = tmpCfg.GUIDTemplate || '';
+							let tmpBucketCol = tmpCfg.BucketColumn;
+							let tmpBucketKind = tmpCfg.BucketKind || 'DateMonth';
+							let tmpBucketSize = tmpCfg.BucketSize || 10;
+							let tmpBucketAs = tmpCfg.BucketAs || 'Bucket';
+							let tmpGroupBy = Array.isArray(tmpCfg.GroupBy) ? tmpCfg.GroupBy : [];
+							let tmpAggs = Array.isArray(tmpCfg.Aggregates) ? tmpCfg.Aggregates : [];
+
+							if (!Array.isArray(tmpRecords) || !tmpBucketCol)
+							{
+								return fHandlerCallback(null, {
+									Outputs: { Records: [], RecordCount: 0, BucketCount: 0, Result: '[]' },
+									Log: [`HistogramRecords: missing Records array or BucketColumn.`]
+								});
+							}
+
+							// Compute the bucket key for one row.
+							let fBucket = (pVal) =>
+							{
+								if (pVal === undefined || pVal === null || pVal === '') return null;
+								if (tmpBucketKind === 'DateYear')  return String(pVal).slice(0, 4);
+								if (tmpBucketKind === 'DateMonth') return String(pVal).slice(0, 7);
+								if (tmpBucketKind === 'DateDay')   return String(pVal).slice(0, 10);
+								if (tmpBucketKind === 'NumericRange')
+								{
+									let tmpN = Number(pVal);
+									if (isNaN(tmpN)) return null;
+									let tmpFloor = Math.floor(tmpN / tmpBucketSize) * tmpBucketSize;
+									return tmpFloor + '-' + (tmpFloor + tmpBucketSize - 1);
+								}
+								return String(pVal);
+							};
+
+							// (Bucket, GroupBy...) → { Rows, BucketKey, GroupKey }
+							let tmpBuckets = {};
+							for (let i = 0; i < tmpRecords.length; i++)
+							{
+								let tmpRow = tmpRecords[i];
+								if (!tmpRow) continue;
+								let tmpBucket = fBucket(tmpRow[tmpBucketCol]);
+								if (tmpBucket === null) continue;
+								let tmpGroupVals = [];
+								for (let g = 0; g < tmpGroupBy.length; g++)
+								{
+									let tmpV = tmpRow[tmpGroupBy[g]];
+									tmpGroupVals.push(tmpV === undefined ? null : tmpV);
+								}
+								let tmpKey = JSON.stringify([tmpBucket, tmpGroupVals]);
+								if (!tmpBuckets[tmpKey]) tmpBuckets[tmpKey] = { Bucket: tmpBucket, GroupVals: tmpGroupVals, Rows: [], Sample: tmpRow };
+								tmpBuckets[tmpKey].Rows.push(tmpRow);
+							}
+
+							let tmpOut = [];
+							let tmpBucketKeys = Object.keys(tmpBuckets);
+							for (let k = 0; k < tmpBucketKeys.length; k++)
+							{
+								let tmpB = tmpBuckets[tmpBucketKeys[k]];
+								let tmpResult = {};
+								tmpResult[tmpBucketAs] = tmpB.Bucket;
+								for (let g = 0; g < tmpGroupBy.length; g++)
+								{
+									tmpResult[tmpGroupBy[g]] = tmpB.GroupVals[g];
+								}
+
+								for (let a = 0; a < tmpAggs.length; a++)
+								{
+									let tmpAgg = tmpAggs[a];
+									let tmpFn = String(tmpAgg.Function || tmpAgg.Op || '').toLowerCase();
+									let tmpSrc = tmpAgg.Source || tmpAgg.Column;
+									let tmpAs = tmpAgg.As || (tmpFn + '_' + (tmpSrc || 'col'));
+									let tmpVals = [];
+									for (let r = 0; r < tmpB.Rows.length; r++)
+									{
+										let tmpV = (tmpSrc === '*' || !tmpSrc) ? 1 : tmpB.Rows[r][tmpSrc];
+										if (typeof tmpV === 'string' && tmpV !== '' && !isNaN(Number(tmpV))) tmpV = Number(tmpV);
+										if (tmpV === undefined || tmpV === null) continue;
+										tmpVals.push(tmpV);
+									}
+									let tmpAggValue = null;
+									switch (tmpFn)
+									{
+										case 'count':
+											tmpAggValue = (tmpSrc === '*' || !tmpSrc) ? tmpB.Rows.length : tmpVals.length;
+											break;
+										case 'sum':
+											tmpAggValue = tmpVals.reduce((s, v) => s + Number(v), 0);
+											break;
+										case 'mean': case 'avg': case 'average':
+											tmpAggValue = tmpVals.length === 0 ? null : tmpVals.reduce((s, v) => s + Number(v), 0) / tmpVals.length;
+											if (tmpAggValue !== null) tmpAggValue = Math.round(tmpAggValue * 100) / 100;
+											break;
+										case 'min':
+											tmpAggValue = tmpVals.length === 0 ? null : tmpVals.reduce((m, v) => Number(v) < m ? Number(v) : m, Number(tmpVals[0]));
+											break;
+										case 'max':
+											tmpAggValue = tmpVals.length === 0 ? null : tmpVals.reduce((m, v) => Number(v) > m ? Number(v) : m, Number(tmpVals[0]));
+											break;
+										default:
+											tmpAggValue = null;
+									}
+									tmpResult[tmpAs] = tmpAggValue;
+								}
+
+								if (tmpGUIDTemplate)
+								{
+									tmpResult[tmpGUIDName] = tmpGUIDTemplate.replace(
+										/\{~D:Record\.(\w+)~\}/g,
+										(_m, pField) =>
+										{
+											let tmpV = tmpResult[pField];
+											if (tmpV === undefined && tmpB.Sample) tmpV = tmpB.Sample[pField];
+											return (tmpV === undefined || tmpV === null) ? '' : String(tmpV).replace(/[^A-Za-z0-9_]/g, '_');
+										});
+								}
+								tmpOut.push(tmpResult);
+							}
+
+							// Sort by bucket then group for stable output (helps idempotence + dashboard charts).
+							tmpOut.sort((a, b) =>
+							{
+								let tmpAk = a[tmpBucketAs] + '|' + JSON.stringify(tmpGroupBy.map((g) => a[g]));
+								let tmpBk = b[tmpBucketAs] + '|' + JSON.stringify(tmpGroupBy.map((g) => b[g]));
+								return tmpAk < tmpBk ? -1 : tmpAk > tmpBk ? 1 : 0;
+							});
+
+							return fHandlerCallback(null, {
+								Outputs:
+								{
+									Records:     tmpOut,
+									RecordCount: tmpOut.length,
+									BucketCount: tmpOut.length,
+									Result:      JSON.stringify(tmpOut)
+								},
+								Log: [`HistogramRecords: ${tmpRecords.length} rows → ${tmpOut.length} (Bucket × Group) cells via ${tmpBucketKind} on ${tmpBucketCol}.`]
+							});
+						}
+					},
+
+					'IntersectRecords':
+					{
+						Description: 'Join SourceRecords × RelatedRecords on a key, optionally OrderBy the related side and Limit per Source row, project a merged namespace (Source fields win on collision; Related fields override only when missing on Source). Use Limit=1 for enrichment-style joins (one related row attached per source); higher Limit + OrderBy for "latest N per X" patterns.',
+						SettingsSchema:
+						[
+							{ Name: 'SourceRecords',          DataType: 'Array',  Required: true, Description: 'Records from the source pull.' },
+							{ Name: 'RelatedRecords',         DataType: 'Array',  Required: true, Description: 'Records from the related pull.' },
+							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true, Description: '{ Entity, GUIDName?, GUIDTemplate?, JoinOn:{SourceField,RelatedField}, OrderBy?:[{Field,Direction}], Limit? (default unlimited), Projection }. Bundled to dodge UV template stripping.' }
+						],
+						Handler: function (pWorkItem, pContext, fHandlerCallback)
+						{
+							let tmpSettings = pWorkItem.Settings || {};
+							let tmpSource = tmpSettings.SourceRecords || [];
+							let tmpRelated = tmpSettings.RelatedRecords || [];
+							let tmpCfg = tmpSettings.OperationConfiguration || {};
+							if (typeof (tmpSource)  === 'string') { try { tmpSource  = JSON.parse(tmpSource);  } catch (e) { tmpSource  = []; } }
+							if (typeof (tmpRelated) === 'string') { try { tmpRelated = JSON.parse(tmpRelated); } catch (e) { tmpRelated = []; } }
+							if (typeof (tmpCfg)     === 'string') { try { tmpCfg     = JSON.parse(tmpCfg);     } catch (e) { tmpCfg     = {}; } }
+
+							let tmpEntity = tmpCfg.Entity || 'Intersection';
+							let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+							let tmpGUIDTemplate = tmpCfg.GUIDTemplate || '';
+							let tmpJoin = tmpCfg.JoinOn || {};
+							let tmpSrcField = tmpJoin.SourceField || 'ID';
+							let tmpRelField = tmpJoin.RelatedField || 'ID';
+							let tmpOrderBy = Array.isArray(tmpCfg.OrderBy) ? tmpCfg.OrderBy : [];
+							let tmpLimit = tmpCfg.Limit || 0;
+							let tmpProjection = tmpCfg.Projection || {};
+
+							if (!Array.isArray(tmpSource) || !Array.isArray(tmpRelated))
+							{
+								return fHandlerCallback(null, {
+									Outputs: { Records: [], RecordCount: 0, MatchedSourceCount: 0, UnmatchedSourceCount: 0, Result: '[]' },
+									Log: [`IntersectRecords: SourceRecords or RelatedRecords missing.`]
+								});
+							}
+
+							// Index Related rows by RelatedField → [rows].
+							let tmpIndex = {};
+							for (let i = 0; i < tmpRelated.length; i++)
+							{
+								let tmpRow = tmpRelated[i];
+								if (!tmpRow) continue;
+								let tmpKey = String(tmpRow[tmpRelField]);
+								if (!tmpIndex[tmpKey]) tmpIndex[tmpKey] = [];
+								tmpIndex[tmpKey].push(tmpRow);
+							}
+
+							let tmpProjKeys = Object.keys(tmpProjection);
+							let tmpOut = [];
+							let tmpMatchedCount = 0;
+							let tmpUnmatchedCount = 0;
+
+							for (let s = 0; s < tmpSource.length; s++)
+							{
+								let tmpSrc = tmpSource[s];
+								if (!tmpSrc) continue;
+								let tmpKey = String(tmpSrc[tmpSrcField]);
+								let tmpMatches = (tmpIndex[tmpKey] || []).slice();
+								if (tmpMatches.length === 0)
+								{
+									tmpUnmatchedCount++;
+									continue;
+								}
+								tmpMatchedCount++;
+
+								// Sort matches per OrderBy (stable, multi-key).
+								if (tmpOrderBy.length > 0)
+								{
+									tmpMatches.sort((a, b) =>
+									{
+										for (let o = 0; o < tmpOrderBy.length; o++)
+										{
+											let tmpOrd = tmpOrderBy[o];
+											let tmpFld = tmpOrd.Field;
+											let tmpDir = String(tmpOrd.Direction || 'ASC').toUpperCase() === 'DESC' ? -1 : 1;
+											let tmpAv = a[tmpFld];
+											let tmpBv = b[tmpFld];
+											if (tmpAv === tmpBv) continue;
+											if (tmpAv === undefined || tmpAv === null) return 1 * tmpDir;
+											if (tmpBv === undefined || tmpBv === null) return -1 * tmpDir;
+											return (tmpAv < tmpBv ? -1 : 1) * tmpDir;
+										}
+										return 0;
+									});
+								}
+
+								if (tmpLimit > 0) tmpMatches = tmpMatches.slice(0, tmpLimit);
+
+								// Emit one record per (source × matched related).
+								for (let m = 0; m < tmpMatches.length; m++)
+								{
+									let tmpRel = tmpMatches[m];
+									// Flat namespace per §6 Q3 decision: Related
+									// fields fill where Source has none; Source
+									// wins on collision (so the source row's
+									// identity columns aren't clobbered).
+									let tmpMerged = Object.assign({}, tmpRel, tmpSrc);
+									let tmpProjected = {};
+									for (let p = 0; p < tmpProjKeys.length; p++)
+									{
+										let tmpExpr = tmpProjection[tmpProjKeys[p]];
+										if (typeof tmpExpr === 'string')
+										{
+											let tmpMatch = tmpExpr.match(/^\{~D:Record\.(\w+)~\}$/);
+											if (tmpMatch) { tmpProjected[tmpProjKeys[p]] = tmpMerged[tmpMatch[1]]; }
+											else if (tmpMerged.hasOwnProperty(tmpExpr)) { tmpProjected[tmpProjKeys[p]] = tmpMerged[tmpExpr]; }
+											else { tmpProjected[tmpProjKeys[p]] = tmpExpr; }
+										}
+										else { tmpProjected[tmpProjKeys[p]] = tmpExpr; }
+									}
+									if (tmpGUIDTemplate)
+									{
+										tmpProjected[tmpGUIDName] = tmpGUIDTemplate.replace(
+											/\{~D:Record\.(\w+)~\}/g,
+											(_m, pField) => (tmpMerged[pField] === undefined || tmpMerged[pField] === null) ? '' : String(tmpMerged[pField]).replace(/[^A-Za-z0-9_]/g, '_'));
+									}
+									tmpOut.push(tmpProjected);
+								}
+							}
+
+							return fHandlerCallback(null, {
+								Outputs:
+								{
+									Records:              tmpOut,
+									RecordCount:          tmpOut.length,
+									MatchedSourceCount:   tmpMatchedCount,
+									UnmatchedSourceCount: tmpUnmatchedCount,
+									Result:               JSON.stringify(tmpOut)
+								},
+								Log: [`IntersectRecords: ${tmpSource.length} source × ${tmpRelated.length} related → ${tmpOut.length} joined rows (${tmpMatchedCount} sources matched, ${tmpUnmatchedCount} unmatched, Limit=${tmpLimit || '∞'}).`]
+							});
+						}
+					},
+
 					'BuildComprehension':
 					{
 						Description: 'Accumulate mapped records into a comprehension keyed by GUID',
@@ -622,7 +1228,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 				}
 			});
 
-		this.log.info('DataMapperBeaconProvider: registered 3 capabilities (DataMapperSource, DataMapperRecords, DataMapperTransform) with 5 actions.');
+		this.log.info('DataMapperBeaconProvider: registered 3 capabilities (DataMapperSource, DataMapperRecords, DataMapperTransform) with 9 actions.');
 	}
 }
 

@@ -1,0 +1,51 @@
+{
+	"_comment": "Result table for the Phase 2b Extraction demo. Mirrors a subset of WeatherStation columns + a deterministic combinatorial GUID. Materialized via DataBeaconSchema:EnsureSchema on lake-databeacon (lake-main connection).",
+
+	"SchemaName": "weather-station-compact",
+	"Version": 1,
+
+	"Tables":
+	[
+		{
+			"Scope": "WeatherStationCompact",
+			"DefaultIdentifier": "IDWeatherStationCompact",
+			"Domain": "Default",
+			"Schema":
+			[
+				{ "Column": "IDWeatherStationCompact",   "Type": "AutoIdentity", "Size": "Default" },
+				{ "Column": "GUIDWeatherStationCompact", "Type": "AutoGUID",     "Size": "255" },
+				{ "Column": "CreateDate",                "Type": "CreateDate",   "Size": "Default" },
+				{ "Column": "CreatingIDUser",            "Type": "CreateIDUser", "Size": "int" },
+				{ "Column": "UpdateDate",                "Type": "UpdateDate",   "Size": "Default" },
+				{ "Column": "UpdatingIDUser",            "Type": "UpdateIDUser", "Size": "int" },
+				{ "Column": "Deleted",                   "Type": "Deleted",      "Size": "Default" },
+				{ "Column": "DeleteDate",                "Type": "DeleteDate",   "Size": "Default" },
+				{ "Column": "DeletingIDUser",            "Type": "DeleteIDUser", "Size": "int" },
+				{ "Column": "StationCode",               "Type": "String",       "Size": "16" },
+				{ "Column": "CityName",                  "Type": "String",       "Size": "128" },
+				{ "Column": "StateName",                 "Type": "String",       "Size": "64" },
+				{ "Column": "Active",                    "Type": "Boolean",      "Size": "Default" }
+			],
+			"DefaultObject":
+			{
+				"IDWeatherStationCompact": 0,
+				"GUIDWeatherStationCompact": "0x0000000000000000",
+				"CreateDate": null,
+				"CreatingIDUser": 0,
+				"UpdateDate": null,
+				"UpdatingIDUser": 0,
+				"Deleted": false,
+				"DeleteDate": null,
+				"DeletingIDUser": 0,
+				"StationCode": "",
+				"CityName": "",
+				"StateName": "",
+				"Active": false
+			},
+			"Indexes":
+			[
+				{ "Name": "UX_WeatherStationCompact_GUID", "Columns": ["GUIDWeatherStationCompact"], "Unique": true }
+			]
+		}
+	]
+}

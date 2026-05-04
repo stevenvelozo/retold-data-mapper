@@ -328,6 +328,138 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 					});
 			});
 
+		// ── EnsureSchema admin pass-through ─────────────────────
+		//
+		// POST /mapper/admin/ensure-schema
+		// Body: { BeaconName, IDBeaconConnection, SchemaName, SchemaJSON, AutoEnable? (default true) }
+		//
+		// Dispatches DataBeaconSchema:EnsureSchema, then (when AutoEnable
+		// is true and TablesCreated is non-empty) Introspect + EnableEndpoint
+		// for each newly created table. Without that follow-up the table
+		// exists on disk but the dynamic endpoint manager has no entry, so
+		// PUT /Upserts returns HTTP 405. The two extra dispatches are
+		// idempotent — Introspect is read-only, EnableEndpoint is no-op
+		// when already enabled.
+		pOratorServiceServer.doPost(`${tmpRoutePrefix}/admin/ensure-schema`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpBody = pRequest.body || {};
+				if (!tmpBody.BeaconName || !tmpBody.IDBeaconConnection || !tmpBody.SchemaName || !tmpBody.SchemaJSON)
+				{
+					return this._sendError(pResponse, 400,
+						'POST /mapper/admin/ensure-schema requires BeaconName, IDBeaconConnection, SchemaName, SchemaJSON', fNext);
+				}
+				let tmpAutoEnable = (tmpBody.AutoEnable === undefined) ? true : !!tmpBody.AutoEnable;
+				this._dispatch(
+					{
+						Capability: 'DataBeaconSchema',
+						Action:     'EnsureSchema',
+						Settings:
+						{
+							IDBeaconConnection: tmpBody.IDBeaconConnection,
+							SchemaName:         tmpBody.SchemaName,
+							SchemaJSON:         tmpBody.SchemaJSON
+						},
+						AffinityKey: tmpBody.BeaconName,
+						TimeoutMs:   60000
+					},
+					(pError, pResult) =>
+					{
+						if (pError) return this._sendError(pResponse, 502, pError.message || String(pError), fNext);
+						let tmpOutputs = (pResult && pResult.Outputs) || pResult || {};
+						let tmpCreated = Array.isArray(tmpOutputs.TablesCreated) ? tmpOutputs.TablesCreated.slice() : [];
+
+						let fDone = (pEnabled) =>
+						{
+							pResponse.send({
+								Success:    !!tmpOutputs.Success,
+								BeaconName: tmpBody.BeaconName,
+								Result:     tmpOutputs,
+								Enabled:    pEnabled || []
+							});
+							return fNext();
+						};
+
+						if (!tmpAutoEnable || tmpCreated.length === 0) return fDone();
+
+						// Refresh introspection so the dynamic endpoint
+						// manager sees the new tables, then enable each.
+						this._dispatch(
+							{
+								Capability: 'DataBeaconManagement',
+								Action:     'Introspect',
+								Settings:   { IDBeaconConnection: tmpBody.IDBeaconConnection },
+								AffinityKey: tmpBody.BeaconName,
+								TimeoutMs:   30000
+							},
+							(pIntErr) =>
+							{
+								if (pIntErr) return fDone({ Error: 'introspect: ' + pIntErr.message });
+
+								let tmpIdx = 0;
+								let tmpEnabled = [];
+								let fNextEnable = () =>
+								{
+									if (tmpIdx >= tmpCreated.length) return fDone(tmpEnabled);
+									let tmpTable = tmpCreated[tmpIdx++];
+									this._dispatch(
+										{
+											Capability: 'DataBeaconManagement',
+											Action:     'EnableEndpoint',
+											Settings:   { IDBeaconConnection: tmpBody.IDBeaconConnection, TableName: tmpTable },
+											AffinityKey: tmpBody.BeaconName,
+											TimeoutMs:   15000
+										},
+										(pEnErr, pEnRes) =>
+										{
+											tmpEnabled.push({ TableName: tmpTable,
+												Success: !pEnErr,
+												Endpoint: ((pEnRes && pEnRes.Outputs) || {}).EndpointBase || null,
+												Error: pEnErr ? pEnErr.message : null });
+											fNextEnable();
+										});
+								};
+								fNextEnable();
+							});
+					});
+			});
+
+		// POST /mapper/admin/enable-endpoint
+		// Body: { BeaconName, IDBeaconConnection, TableName }
+		// Calls DataBeaconManagement:EnableEndpoint so a table just created
+		// via EnsureSchema gets its CRUD REST surface (incl. PUT /Upserts)
+		// exposed. Without this, WriteRecords would fail with HTTP 405 on
+		// the bulk PUT path.
+		pOratorServiceServer.doPost(`${tmpRoutePrefix}/admin/enable-endpoint`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpBody = pRequest.body || {};
+				if (!tmpBody.BeaconName || !tmpBody.IDBeaconConnection || !tmpBody.TableName)
+				{
+					return this._sendError(pResponse, 400,
+						'POST /mapper/admin/enable-endpoint requires BeaconName, IDBeaconConnection, TableName', fNext);
+				}
+				this._dispatch(
+					{
+						Capability: 'DataBeaconManagement',
+						Action:     'EnableEndpoint',
+						Settings:
+						{
+							IDBeaconConnection: tmpBody.IDBeaconConnection,
+							TableName:          tmpBody.TableName
+						},
+						AffinityKey: tmpBody.BeaconName,
+						TimeoutMs:   30000
+					},
+					(pError, pResult) =>
+					{
+						if (pError) return this._sendError(pResponse, 502, pError.message || String(pError), fNext);
+						let tmpOutputs = (pResult && pResult.Outputs) || pResult || {};
+						pResponse.send({ Success: true, BeaconName: tmpBody.BeaconName, TableName: tmpBody.TableName, Result: tmpOutputs });
+						return fNext();
+					});
+			});
+
 		// ── MappingConfig CRUD ──────────────────────────────────
 
 		// Scope semantics for /mapper/mappings:
@@ -787,6 +919,195 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 					});
 			});
 
+		// ─────────────────────────────────────────────────────────────
+		//  OperationConfig CRUD (Phase 2b — typed operations)
+		//
+		//  Mirrors /mapper/dashboards: storage on configs-databeacon,
+		//  proxied via MeadowProxy. (Scope, Hash) is the unique key.
+		//  OperationType discriminates Extraction / Aggregation /
+		//  Histogram / Intersection — the bridge dispatches by it at
+		//  compile time. See PLAN-PHASE-2B-Operation-Types.md §3 for
+		//  the per-type OperationConfiguration shape.
+		// ─────────────────────────────────────────────────────────────
+
+		// GET /mapper/operations?scope=<scope>&type=<OperationType>
+		pOratorServiceServer.doGet(`${tmpRoutePrefix}/operations`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpScope = (pRequest.query && pRequest.query.scope !== undefined) ? pRequest.query.scope : '';
+				let tmpType = (pRequest.query && pRequest.query.type) || '';
+				beaconRequest('configs-databeacon', '/1.0/platform-configs/OperationConfigs/0/1000',
+					(pError, pRows) =>
+					{
+						if (pError) return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
+						let tmpRows = Array.isArray(pRows) ? pRows : [];
+						let tmpFiltered = tmpRows.filter((pR) =>
+						{
+							if (pR.Deleted) return false;
+							if (!_scopeMatches(pR, tmpScope)) return false;
+							if (tmpType && pR.OperationType !== tmpType) return false;
+							return true;
+						});
+						pResponse.send({
+							Count: tmpFiltered.length,
+							Operations: tmpFiltered.map((pR) =>
+								({
+									IDOperationConfig: pR.IDOperationConfig,
+									Hash:              pR.Hash,
+									Scope:             pR.Scope || '',
+									Name:              pR.Name,
+									Description:       pR.Description,
+									OperationType:     pR.OperationType,
+									SourceBeaconName:  pR.SourceBeaconName,
+									SourceConnectionHash: pR.SourceConnectionHash,
+									SourceEntity:      pR.SourceEntity,
+									TargetBeaconName:  pR.TargetBeaconName,
+									TargetConnectionHash: pR.TargetConnectionHash,
+									TargetTable:       pR.TargetTable
+								}))
+						});
+						return fNext();
+					});
+			});
+
+		// GET /mapper/operation/:hash?scope=<scope>
+		// Lookup is by (Scope, Hash). OperationConfiguration is JSON-parsed
+		// before returning so the editor doesn't have to.
+		pOratorServiceServer.doGet(`${tmpRoutePrefix}/operation/:hash`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpHash = pRequest.params.hash;
+				let tmpScope = (pRequest.query && pRequest.query.scope !== undefined) ? pRequest.query.scope : '';
+				beaconRequest('configs-databeacon',
+					'/1.0/platform-configs/OperationConfigs/FilteredTo/FBV~Hash~EQ~' + encodeURIComponent(tmpHash),
+					(pError, pRows) =>
+					{
+						if (pError) return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
+						let tmpMatches = (Array.isArray(pRows) ? pRows : []).filter((pR) => !pR.Deleted && _scopeMatches(pR, tmpScope));
+						if (tmpMatches.length === 0)
+						{
+							return _self._sendError(pResponse, 404, `Operation ${tmpHash} not found in scope "${tmpScope}"`, fNext);
+						}
+						let tmpRow = tmpMatches[0];
+						let tmpCfg = tmpRow.OperationConfiguration;
+						try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { /* keep as-is */ }
+						pResponse.send(Object.assign({}, tmpRow, { OperationConfiguration: tmpCfg }));
+						return fNext();
+					});
+			});
+
+		// POST /mapper/operations?scope=<scope> — create.
+		// Body: { Hash, Name, Description?, OperationType, SourceBeaconName,
+		//         SourceConnectionHash, SourceEntity, TargetBeaconName,
+		//         TargetConnectionHash, TargetTable, OperationConfiguration }
+		pOratorServiceServer.doPost(`${tmpRoutePrefix}/operations`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpBody = pRequest.body || {};
+				if (!tmpBody.Hash)         return _self._sendError(pResponse, 400, 'POST /mapper/operations requires Hash', fNext);
+				if (!tmpBody.OperationType) return _self._sendError(pResponse, 400, 'POST /mapper/operations requires OperationType', fNext);
+				let tmpQueryScope = (pRequest.query && pRequest.query.scope !== undefined && pRequest.query.scope !== '*')
+					? String(pRequest.query.scope) : '';
+				let tmpRecord =
+				{
+					Hash:                 String(tmpBody.Hash),
+					Scope:                (tmpBody.Scope !== undefined) ? String(tmpBody.Scope || '') : tmpQueryScope,
+					Name:                 tmpBody.Name || '',
+					Description:          tmpBody.Description || '',
+					OperationType:        String(tmpBody.OperationType),
+					SourceBeaconName:     tmpBody.SourceBeaconName || '',
+					SourceConnectionHash: tmpBody.SourceConnectionHash || '',
+					SourceEntity:         tmpBody.SourceEntity || '',
+					TargetBeaconName:     tmpBody.TargetBeaconName || '',
+					TargetConnectionHash: tmpBody.TargetConnectionHash || '',
+					TargetTable:          tmpBody.TargetTable || '',
+					OperationConfiguration: (typeof tmpBody.OperationConfiguration === 'string')
+						? tmpBody.OperationConfiguration
+						: JSON.stringify(tmpBody.OperationConfiguration || {})
+				};
+				beaconRequestEx('configs-databeacon', 'POST',
+					'/1.0/platform-configs/OperationConfig', tmpRecord,
+					(pError, pResult) =>
+					{
+						if (pError) return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
+						pResponse.send({ Success: true, Operation: pResult });
+						return fNext();
+					});
+			});
+
+		// PUT /mapper/operation/:id — update by primary key.
+		// Same soft-delete-then-insert pattern as /mapper/dashboard/:id
+		// (meadow's PUT/PATCH surface isn't enabled on this beacon, and the
+		// (Scope, Hash) UNIQUE INDEX has WHERE Deleted=0 so the new row
+		// coexists with the soft-deleted one). IDOperationConfig changes
+		// — callers should re-fetch by Hash if they need the new ID.
+		pOratorServiceServer.doPut(`${tmpRoutePrefix}/operation/:id`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpID = parseInt(pRequest.params.id, 10);
+				if (!tmpID) return _self._sendError(pResponse, 400, 'PUT /mapper/operation/:id requires numeric ID', fNext);
+				let tmpBody = pRequest.body || {};
+
+				beaconRequestEx('configs-databeacon', 'GET',
+					'/1.0/platform-configs/OperationConfig/' + tmpID, null,
+					(pReadErr, pExisting) =>
+					{
+						if (pReadErr) return _self._sendError(pResponse, 502, pReadErr.message || String(pReadErr), fNext);
+						if (!pExisting || !pExisting.IDOperationConfig)
+						{
+							return _self._sendError(pResponse, 404, 'Operation ' + tmpID + ' not found', fNext);
+						}
+
+						let tmpFields = ['Hash', 'Scope', 'Name', 'Description', 'OperationType',
+							'SourceBeaconName', 'SourceConnectionHash', 'SourceEntity',
+							'TargetBeaconName', 'TargetConnectionHash', 'TargetTable'];
+						let tmpMerged = {};
+						for (let i = 0; i < tmpFields.length; i++)
+						{
+							let tmpField = tmpFields[i];
+							tmpMerged[tmpField] = (tmpBody[tmpField] !== undefined)
+								? (tmpField === 'Scope' ? String(tmpBody[tmpField] || '') : tmpBody[tmpField])
+								: pExisting[tmpField];
+						}
+						tmpMerged.OperationConfiguration = (tmpBody.OperationConfiguration !== undefined)
+							? (typeof tmpBody.OperationConfiguration === 'string'
+								? tmpBody.OperationConfiguration
+								: JSON.stringify(tmpBody.OperationConfiguration))
+							: pExisting.OperationConfiguration;
+
+						beaconRequestEx('configs-databeacon', 'DELETE',
+							'/1.0/platform-configs/OperationConfig/' + tmpID, null,
+							(pDelErr) =>
+							{
+								if (pDelErr) return _self._sendError(pResponse, 502, pDelErr.message || String(pDelErr), fNext);
+								beaconRequestEx('configs-databeacon', 'POST',
+									'/1.0/platform-configs/OperationConfig', tmpMerged,
+									(pInsErr, pInserted) =>
+									{
+										if (pInsErr) return _self._sendError(pResponse, 502, pInsErr.message || String(pInsErr), fNext);
+										pResponse.send({ Success: true, Operation: pInserted });
+										return fNext();
+									});
+							});
+					});
+			});
+
+		// DELETE /mapper/operation/:id — soft-delete by primary key.
+		pOratorServiceServer.doDel(`${tmpRoutePrefix}/operation/:id`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpID = parseInt(pRequest.params.id, 10);
+				if (!tmpID) return _self._sendError(pResponse, 400, 'DELETE /mapper/operation/:id requires numeric ID', fNext);
+				beaconRequestEx('configs-databeacon', 'DELETE',
+					'/1.0/platform-configs/OperationConfig/' + tmpID, null,
+					(pError, pResult) =>
+					{
+						if (pError) return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
+						pResponse.send({ Success: true, Result: pResult });
+						return fNext();
+					});
+			});
+
 		// ── Ultravisor pass-through (compile + run via UV) ──────
 		// This is the "glue" surface — the data-mapper UI calls these
 		// to compile a stored MappingConfig into a fully-unfolded
@@ -841,6 +1162,84 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 											Success:        pManifest && (pManifest.Status === 'Complete'),
 											OperationHash:  tmpHash,
 											OperationName:  tmpGraph.Name,
+											RunHash:        pManifest && pManifest.RunHash,
+											Status:         pManifest && pManifest.Status,
+											ElapsedMs:      pManifest && pManifest.ElapsedMs,
+											TaskOutputs:    _self._summarizeTaskOutputs(pManifest && pManifest.TaskOutputs),
+											Errors:         pManifest && pManifest.Errors
+										});
+										return fNext();
+									});
+							});
+					});
+			});
+
+		// POST /mapper/uv/run-operation/:id
+		// Look up the OperationConfig on the configs-databeacon by
+		// IDOperationConfig, dispatch by OperationType to the matching
+		// _compile<Type>ToOperation compiler, POST the resulting Operation
+		// graph to UV's /Operation, trigger it, and return the manifest
+		// summary. Same response shape as /mapper/uv/run-mapping/:id so
+		// the editor's result-panel renderer is shared.
+		pOratorServiceServer.doPost(`${tmpRoutePrefix}/uv/run-operation/:id`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpClient = _self._client();
+				if (!tmpClient) return _self._sendError(pResponse, 503, 'Not connected to an Ultravisor', fNext);
+				let tmpID = parseInt(pRequest.params.id, 10);
+				if (!tmpID) return _self._sendError(pResponse, 400, 'POST /mapper/uv/run-operation/:id requires numeric ID', fNext);
+
+				beaconRequestEx('configs-databeacon', 'GET',
+					'/1.0/platform-configs/OperationConfig/' + tmpID, null,
+					(pErr, pOperation) =>
+					{
+						if (pErr) return _self._sendError(pResponse, 502, pErr.message || String(pErr), fNext);
+						if (!pOperation || !pOperation.IDOperationConfig)
+						{
+							return _self._sendError(pResponse, 404, 'Operation ' + tmpID + ' not found', fNext);
+						}
+
+						let tmpType = String(pOperation.OperationType || '').toLowerCase();
+						let tmpGraph = null;
+						let tmpDispatchErr = null;
+						switch (tmpType)
+						{
+							case 'extraction':
+								tmpGraph = _self._compileExtractionToOperation(pOperation);
+								break;
+							case 'aggregation':
+								tmpGraph = _self._compileAggregationToOperation(pOperation);
+								break;
+							case 'histogram':
+								tmpGraph = _self._compileHistogramToOperation(pOperation);
+								break;
+							case 'intersection':
+								tmpGraph = _self._compileIntersectionToOperation(pOperation);
+								break;
+							default:
+								tmpDispatchErr = 'OperationType "' + pOperation.OperationType + '" not supported. Expected one of: Extraction, Aggregation, Histogram, Intersection.';
+						}
+						if (tmpDispatchErr)
+						{
+							return _self._sendError(pResponse, 501, tmpDispatchErr, fNext);
+						}
+
+						_self._request('POST', '/Operation', tmpGraph,
+							(pPostErr, pCreated) =>
+							{
+								if (pPostErr) return _self._sendError(pResponse, 502, 'UV /Operation failed: ' + pPostErr.message, fNext);
+								let tmpHash = (pCreated && pCreated.Hash) || (tmpGraph && tmpGraph.Hash);
+								if (!tmpHash) return _self._sendError(pResponse, 502, 'UV /Operation returned no Hash', fNext);
+
+								_self._request('POST', '/Operation/' + tmpHash + '/Trigger', {},
+									(pTrigErr, pManifest) =>
+									{
+										if (pTrigErr) return _self._sendError(pResponse, 502, 'UV /Trigger failed: ' + pTrigErr.message, fNext);
+										pResponse.send({
+											Success:        pManifest && (pManifest.Status === 'Complete'),
+											OperationHash:  tmpHash,
+											OperationName:  tmpGraph.Name,
+											OperationType:  pOperation.OperationType,
 											RunHash:        pManifest && pManifest.RunHash,
 											Status:         pManifest && pManifest.Status,
 											ElapsedMs:      pManifest && pManifest.ElapsedMs,
@@ -1017,6 +1416,476 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 	}
 
 	/**
+	 * Compile an OperationConfig (OperationType=Extraction) into the
+	 * canonical Pull → Extract → Comprehension → Write graph.
+	 *
+	 *   Pull       — paginated read of source entity
+	 *     ↓ State: Records[]
+	 *   Extract    — Filter + Project + GUID via DataMapperTransform:ExtractRecords
+	 *     ↓ State: Records[]
+	 *   Comprehension — keys mapped records by GUID
+	 *     ↓ State: Comprehension{}
+	 *   Write      — bulk Upserts via meadow-integration to TargetTable
+	 *
+	 * Same shape as _compileMappingToOperation, but the middle node is
+	 * ExtractRecords instead of MapRecords. Filter rejects and Projection
+	 * errors attribute to the Extract node in the manifest.
+	 */
+	_compileExtractionToOperation(pOperation)
+	{
+		let tmpCfg = pOperation.OperationConfiguration || {};
+		if (typeof tmpCfg === 'string')
+		{
+			try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpCfg = {}; }
+		}
+
+		let tmpEntity = tmpCfg.Entity || pOperation.TargetTable || 'Record';
+		let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+		let tmpGUIDTemplate = tmpCfg.GUIDTemplate || '';
+		let tmpProjection = tmpCfg.Projection || {};
+		let tmpFilter = tmpCfg.Filter || null;
+		let tmpHashSeed = (pOperation.Hash || ('operation-' + pOperation.IDOperationConfig));
+		let tmpName = pOperation.Name || ('Operation ' + (pOperation.Hash || pOperation.IDOperationConfig));
+
+		return {
+			Name: tmpName,
+			Description: pOperation.Description || '',
+			Tags: ['data-mapper', 'operation', 'extraction', tmpHashSeed],
+			Author: 'retold-data-mapper',
+			Version: '1.0.0',
+			Graph: {
+				Nodes: [
+					{ Hash: 'start', Type: 'start', X: 50, Y: 200, Width: 100, Height: 60, Title: 'Start',
+					  Ports: [ { Hash: 'start-eo-out', Direction: 'output', Side: 'right-bottom' } ] },
+
+					{ Hash: 'pull', Type: 'beacon-datamapperrecords-pullrecords',
+					  X: 220, Y: 180, Width: 220, Height: 140, Title: 'Pull ' + (pOperation.SourceEntity || '?'),
+					  Ports: [
+						{ Hash: 'p-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'p-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'p-so-Result',   Direction: 'output', Side: 'right-top',    Label: 'Result' }
+					  ],
+					  Data: {
+						SourceBeaconName: pOperation.SourceBeaconName || '',
+						ConnectionHash:   pOperation.SourceConnectionHash || '',
+						Entity:           pOperation.SourceEntity || '',
+						BatchSize:        100,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'extract', Type: 'beacon-datamappertransform-extractrecords',
+					  X: 480, Y: 180, Width: 220, Height: 140, Title: 'Extract → ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'x-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'x-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'x-si-Records',  Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'x-so-Result',   Direction: 'output', Side: 'right-top',   Label: 'Result' }
+					  ],
+					  Data: {
+						// Bundle Entity / GUIDName / GUIDTemplate / Projection / Filter
+						// into ONE Object-typed setting. UV's settings resolver
+						// template-resolves String-typed inputs (it would strip
+						// {~D:Record.X~} placeholders from a top-level GUIDTemplate
+						// or Projection-value strings before the handler runs).
+						// MappingConfiguration in MapRecords uses the same trick.
+						OperationConfiguration: JSON.stringify({
+							Entity:       tmpEntity,
+							GUIDName:     tmpGUIDName,
+							GUIDTemplate: tmpGUIDTemplate,
+							Projection:   tmpProjection,
+							Filter:       tmpFilter
+						}),
+						AffinityKey:  'data-mapper'
+					  }
+					},
+
+					{ Hash: 'comprehension', Type: 'beacon-datamappertransform-buildcomprehension',
+					  X: 740, Y: 180, Width: 240, Height: 140, Title: 'Comprehend ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'c-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'c-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'c-si-Records',       Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'c-so-Comprehension', Direction: 'output', Side: 'right-top',   Label: 'Comprehension' }
+					  ],
+					  Data: {
+						Entity:       tmpEntity,
+						GUIDField:    tmpGUIDName,
+						AffinityKey:  'data-mapper'
+					  }
+					},
+
+					{ Hash: 'write', Type: 'beacon-datamapperrecords-writerecords',
+					  X: 1020, Y: 180, Width: 240, Height: 140, Title: 'Upsert ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'w-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'w-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'w-si-Comprehension', Direction: 'input',  Side: 'left-top',    Label: 'Comprehension' }
+					  ],
+					  Data: {
+						TargetBeaconName: pOperation.TargetBeaconName || '',
+						ConnectionHash:   pOperation.TargetConnectionHash || '',
+						Entity:           tmpEntity,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'end', Type: 'end', X: 1300, Y: 220, Width: 100, Height: 60, Title: 'End',
+					  Ports: [ { Hash: 'end-ei-in', Direction: 'input', Side: 'left-bottom' } ] }
+				],
+				Connections: [
+					// Event flow
+					{ SourceNodeHash: 'start',         SourcePortHash: 'start-eo-out',   TargetNodeHash: 'pull',          TargetPortHash: 'p-ei-Trigger' },
+					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-eo-Complete',  TargetNodeHash: 'extract',       TargetPortHash: 'x-ei-Trigger' },
+					{ SourceNodeHash: 'extract',       SourcePortHash: 'x-eo-Complete',  TargetNodeHash: 'comprehension', TargetPortHash: 'c-ei-Trigger' },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-eo-Complete',  TargetNodeHash: 'write',         TargetPortHash: 'w-ei-Trigger' },
+					{ SourceNodeHash: 'write',         SourcePortHash: 'w-eo-Complete',  TargetNodeHash: 'end',           TargetPortHash: 'end-ei-in' },
+
+					// State (data) flow
+					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-so-Result',         TargetNodeHash: 'extract',       TargetPortHash: 'x-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'extract',       SourcePortHash: 'x-so-Result',         TargetNodeHash: 'comprehension', TargetPortHash: 'c-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-so-Comprehension',  TargetNodeHash: 'write',         TargetPortHash: 'w-si-Comprehension', ConnectionType: 'State', Data: { StateKey: 'Comprehension' } }
+				],
+				ViewState: { PanX: 0, PanY: 0, Zoom: 1 }
+			}
+		};
+	}
+
+	/**
+	 * Compile an OperationConfig (OperationType=Aggregation) into the
+	 * canonical Pull → Aggregate → Comprehension → Write graph. The
+	 * Aggregate node groups records by GroupBy keys and computes the
+	 * configured aggregates per group.
+	 */
+	_compileAggregationToOperation(pOperation)
+	{
+		let tmpCfg = pOperation.OperationConfiguration || {};
+		if (typeof tmpCfg === 'string') { try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpCfg = {}; } }
+
+		let tmpEntity = tmpCfg.Entity || pOperation.TargetTable || 'Aggregate';
+		let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+		let tmpHashSeed = (pOperation.Hash || ('operation-' + pOperation.IDOperationConfig));
+		let tmpName = pOperation.Name || ('Operation ' + (pOperation.Hash || pOperation.IDOperationConfig));
+
+		return {
+			Name: tmpName,
+			Description: pOperation.Description || '',
+			Tags: ['data-mapper', 'operation', 'aggregation', tmpHashSeed],
+			Author: 'retold-data-mapper',
+			Version: '1.0.0',
+			Graph: {
+				Nodes: [
+					{ Hash: 'start', Type: 'start', X: 50, Y: 200, Width: 100, Height: 60, Title: 'Start',
+					  Ports: [ { Hash: 'start-eo-out', Direction: 'output', Side: 'right-bottom' } ] },
+
+					{ Hash: 'pull', Type: 'beacon-datamapperrecords-pullrecords',
+					  X: 220, Y: 180, Width: 220, Height: 140, Title: 'Pull ' + (pOperation.SourceEntity || '?'),
+					  Ports: [
+						{ Hash: 'p-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'p-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'p-so-Result',   Direction: 'output', Side: 'right-top',    Label: 'Result' }
+					  ],
+					  Data: {
+						SourceBeaconName: pOperation.SourceBeaconName || '',
+						ConnectionHash:   pOperation.SourceConnectionHash || '',
+						Entity:           pOperation.SourceEntity || '',
+						BatchSize:        500,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'aggregate', Type: 'beacon-datamappertransform-aggregaterecords',
+					  X: 480, Y: 180, Width: 220, Height: 140, Title: 'Aggregate → ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'a-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'a-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'a-si-Records',  Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'a-so-Result',   Direction: 'output', Side: 'right-top',   Label: 'Result' }
+					  ],
+					  Data: {
+						OperationConfiguration: JSON.stringify(tmpCfg),
+						AffinityKey:            'data-mapper'
+					  }
+					},
+
+					{ Hash: 'comprehension', Type: 'beacon-datamappertransform-buildcomprehension',
+					  X: 740, Y: 180, Width: 240, Height: 140, Title: 'Comprehend ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'c-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'c-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'c-si-Records',       Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'c-so-Comprehension', Direction: 'output', Side: 'right-top',   Label: 'Comprehension' }
+					  ],
+					  Data: { Entity: tmpEntity, GUIDField: tmpGUIDName, AffinityKey: 'data-mapper' }
+					},
+
+					{ Hash: 'write', Type: 'beacon-datamapperrecords-writerecords',
+					  X: 1020, Y: 180, Width: 240, Height: 140, Title: 'Upsert ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'w-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'w-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'w-si-Comprehension', Direction: 'input',  Side: 'left-top',    Label: 'Comprehension' }
+					  ],
+					  Data: {
+						TargetBeaconName: pOperation.TargetBeaconName || '',
+						ConnectionHash:   pOperation.TargetConnectionHash || '',
+						Entity:           tmpEntity,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'end', Type: 'end', X: 1300, Y: 220, Width: 100, Height: 60, Title: 'End',
+					  Ports: [ { Hash: 'end-ei-in', Direction: 'input', Side: 'left-bottom' } ] }
+				],
+				Connections: [
+					{ SourceNodeHash: 'start',         SourcePortHash: 'start-eo-out',  TargetNodeHash: 'pull',          TargetPortHash: 'p-ei-Trigger' },
+					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-eo-Complete', TargetNodeHash: 'aggregate',     TargetPortHash: 'a-ei-Trigger' },
+					{ SourceNodeHash: 'aggregate',     SourcePortHash: 'a-eo-Complete', TargetNodeHash: 'comprehension', TargetPortHash: 'c-ei-Trigger' },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-eo-Complete', TargetNodeHash: 'write',         TargetPortHash: 'w-ei-Trigger' },
+					{ SourceNodeHash: 'write',         SourcePortHash: 'w-eo-Complete', TargetNodeHash: 'end',           TargetPortHash: 'end-ei-in' },
+
+					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-so-Result',        TargetNodeHash: 'aggregate',     TargetPortHash: 'a-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'aggregate',     SourcePortHash: 'a-so-Result',        TargetNodeHash: 'comprehension', TargetPortHash: 'c-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-so-Comprehension', TargetNodeHash: 'write',         TargetPortHash: 'w-si-Comprehension', ConnectionType: 'State', Data: { StateKey: 'Comprehension' } }
+				],
+				ViewState: { PanX: 0, PanY: 0, Zoom: 1 }
+			}
+		};
+	}
+
+	/**
+	 * Compile an OperationConfig (OperationType=Histogram). Same shape
+	 * as Aggregation but the middle node is HistogramRecords and the
+	 * config carries BucketColumn / BucketKind / BucketSize alongside
+	 * GroupBy + Aggregates.
+	 */
+	_compileHistogramToOperation(pOperation)
+	{
+		let tmpCfg = pOperation.OperationConfiguration || {};
+		if (typeof tmpCfg === 'string') { try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpCfg = {}; } }
+
+		let tmpEntity = tmpCfg.Entity || pOperation.TargetTable || 'Histogram';
+		let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+		let tmpHashSeed = (pOperation.Hash || ('operation-' + pOperation.IDOperationConfig));
+		let tmpName = pOperation.Name || ('Operation ' + (pOperation.Hash || pOperation.IDOperationConfig));
+
+		return {
+			Name: tmpName,
+			Description: pOperation.Description || '',
+			Tags: ['data-mapper', 'operation', 'histogram', tmpHashSeed],
+			Author: 'retold-data-mapper',
+			Version: '1.0.0',
+			Graph: {
+				Nodes: [
+					{ Hash: 'start', Type: 'start', X: 50, Y: 200, Width: 100, Height: 60, Title: 'Start',
+					  Ports: [ { Hash: 'start-eo-out', Direction: 'output', Side: 'right-bottom' } ] },
+
+					{ Hash: 'pull', Type: 'beacon-datamapperrecords-pullrecords',
+					  X: 220, Y: 180, Width: 220, Height: 140, Title: 'Pull ' + (pOperation.SourceEntity || '?'),
+					  Ports: [
+						{ Hash: 'p-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'p-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'p-so-Result',   Direction: 'output', Side: 'right-top',    Label: 'Result' }
+					  ],
+					  Data: {
+						SourceBeaconName: pOperation.SourceBeaconName || '',
+						ConnectionHash:   pOperation.SourceConnectionHash || '',
+						Entity:           pOperation.SourceEntity || '',
+						BatchSize:        500,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'histogram', Type: 'beacon-datamappertransform-histogramrecords',
+					  X: 480, Y: 180, Width: 220, Height: 140, Title: 'Histogram → ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'h-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'h-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'h-si-Records',  Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'h-so-Result',   Direction: 'output', Side: 'right-top',   Label: 'Result' }
+					  ],
+					  Data: { OperationConfiguration: JSON.stringify(tmpCfg), AffinityKey: 'data-mapper' }
+					},
+
+					{ Hash: 'comprehension', Type: 'beacon-datamappertransform-buildcomprehension',
+					  X: 740, Y: 180, Width: 240, Height: 140, Title: 'Comprehend ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'c-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'c-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'c-si-Records',       Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'c-so-Comprehension', Direction: 'output', Side: 'right-top',   Label: 'Comprehension' }
+					  ],
+					  Data: { Entity: tmpEntity, GUIDField: tmpGUIDName, AffinityKey: 'data-mapper' }
+					},
+
+					{ Hash: 'write', Type: 'beacon-datamapperrecords-writerecords',
+					  X: 1020, Y: 180, Width: 240, Height: 140, Title: 'Upsert ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'w-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'w-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'w-si-Comprehension', Direction: 'input',  Side: 'left-top',    Label: 'Comprehension' }
+					  ],
+					  Data: {
+						TargetBeaconName: pOperation.TargetBeaconName || '',
+						ConnectionHash:   pOperation.TargetConnectionHash || '',
+						Entity:           tmpEntity,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'end', Type: 'end', X: 1300, Y: 220, Width: 100, Height: 60, Title: 'End',
+					  Ports: [ { Hash: 'end-ei-in', Direction: 'input', Side: 'left-bottom' } ] }
+				],
+				Connections: [
+					{ SourceNodeHash: 'start',         SourcePortHash: 'start-eo-out',  TargetNodeHash: 'pull',          TargetPortHash: 'p-ei-Trigger' },
+					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-eo-Complete', TargetNodeHash: 'histogram',     TargetPortHash: 'h-ei-Trigger' },
+					{ SourceNodeHash: 'histogram',     SourcePortHash: 'h-eo-Complete', TargetNodeHash: 'comprehension', TargetPortHash: 'c-ei-Trigger' },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-eo-Complete', TargetNodeHash: 'write',         TargetPortHash: 'w-ei-Trigger' },
+					{ SourceNodeHash: 'write',         SourcePortHash: 'w-eo-Complete', TargetNodeHash: 'end',           TargetPortHash: 'end-ei-in' },
+
+					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-so-Result',        TargetNodeHash: 'histogram',     TargetPortHash: 'h-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'histogram',     SourcePortHash: 'h-so-Result',        TargetNodeHash: 'comprehension', TargetPortHash: 'c-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-so-Comprehension', TargetNodeHash: 'write',         TargetPortHash: 'w-si-Comprehension', ConnectionType: 'State', Data: { StateKey: 'Comprehension' } }
+				],
+				ViewState: { PanX: 0, PanY: 0, Zoom: 1 }
+			}
+		};
+	}
+
+	/**
+	 * Compile an OperationConfig (OperationType=Intersection). 7-node
+	 * graph: two Pull nodes (one per join side) feeding an Intersect
+	 * node that builds a flat-namespace-merged result, then the standard
+	 * Comprehension → Write tail. Used for both enrichment-style joins
+	 * (Limit=1) and "latest N per X" patterns (Limit > 1, OrderBy set).
+	 *
+	 * The OperationConfiguration must declare:
+	 *   - RelatedBeaconName, RelatedConnectionHash, RelatedEntity
+	 *   - JoinOn: { SourceField, RelatedField }
+	 *   - Projection: { TargetCol: "{~D:Record.MergedField~}" or literal }
+	 *   - GUIDName / GUIDTemplate (combinatorial, references merged fields)
+	 *   - OrderBy?: [{ Field, Direction }]   (DESC|ASC)
+	 *   - Limit?: number                     (default unlimited)
+	 */
+	_compileIntersectionToOperation(pOperation)
+	{
+		let tmpCfg = pOperation.OperationConfiguration || {};
+		if (typeof tmpCfg === 'string') { try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpCfg = {}; } }
+
+		let tmpEntity = tmpCfg.Entity || pOperation.TargetTable || 'Intersection';
+		let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+		let tmpRelatedBeacon = tmpCfg.RelatedBeaconName || pOperation.SourceBeaconName || '';
+		let tmpRelatedConn = tmpCfg.RelatedConnectionHash || pOperation.SourceConnectionHash || '';
+		let tmpRelatedEntity = tmpCfg.RelatedEntity || '';
+		let tmpHashSeed = (pOperation.Hash || ('operation-' + pOperation.IDOperationConfig));
+		let tmpName = pOperation.Name || ('Operation ' + (pOperation.Hash || pOperation.IDOperationConfig));
+
+		return {
+			Name: tmpName,
+			Description: pOperation.Description || '',
+			Tags: ['data-mapper', 'operation', 'intersection', tmpHashSeed],
+			Author: 'retold-data-mapper',
+			Version: '1.0.0',
+			Graph: {
+				Nodes: [
+					{ Hash: 'start', Type: 'start', X: 50, Y: 220, Width: 100, Height: 60, Title: 'Start',
+					  Ports: [ { Hash: 'start-eo-out', Direction: 'output', Side: 'right-bottom' } ] },
+
+					{ Hash: 'pull-source', Type: 'beacon-datamapperrecords-pullrecords',
+					  X: 220, Y: 100, Width: 220, Height: 140, Title: 'Pull source: ' + (pOperation.SourceEntity || '?'),
+					  Ports: [
+						{ Hash: 'ps-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'ps-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'ps-so-Result',   Direction: 'output', Side: 'right-top',    Label: 'Result' }
+					  ],
+					  Data: {
+						SourceBeaconName: pOperation.SourceBeaconName || '',
+						ConnectionHash:   pOperation.SourceConnectionHash || '',
+						Entity:           pOperation.SourceEntity || '',
+						BatchSize:        500,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'pull-related', Type: 'beacon-datamapperrecords-pullrecords',
+					  X: 220, Y: 320, Width: 220, Height: 140, Title: 'Pull related: ' + tmpRelatedEntity,
+					  Ports: [
+						{ Hash: 'pr-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'pr-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'pr-so-Result',   Direction: 'output', Side: 'right-top',    Label: 'Result' }
+					  ],
+					  Data: {
+						SourceBeaconName: tmpRelatedBeacon,
+						ConnectionHash:   tmpRelatedConn,
+						Entity:           tmpRelatedEntity,
+						BatchSize:        500,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'intersect', Type: 'beacon-datamappertransform-intersectrecords',
+					  X: 510, Y: 220, Width: 240, Height: 160, Title: 'Intersect → ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'i-ei-Trigger',         Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'i-eo-Complete',        Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'i-si-SourceRecords',   Direction: 'input',  Side: 'left-top',    Label: 'SourceRecords' },
+						{ Hash: 'i-si-RelatedRecords',  Direction: 'input',  Side: 'left',        Label: 'RelatedRecords' },
+						{ Hash: 'i-so-Result',          Direction: 'output', Side: 'right-top',   Label: 'Result' }
+					  ],
+					  Data: { OperationConfiguration: JSON.stringify(tmpCfg), AffinityKey: 'data-mapper' }
+					},
+
+					{ Hash: 'comprehension', Type: 'beacon-datamappertransform-buildcomprehension',
+					  X: 800, Y: 200, Width: 240, Height: 140, Title: 'Comprehend ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'c-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'c-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'c-si-Records',       Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'c-so-Comprehension', Direction: 'output', Side: 'right-top',   Label: 'Comprehension' }
+					  ],
+					  Data: { Entity: tmpEntity, GUIDField: tmpGUIDName, AffinityKey: 'data-mapper' }
+					},
+
+					{ Hash: 'write', Type: 'beacon-datamapperrecords-writerecords',
+					  X: 1080, Y: 220, Width: 240, Height: 140, Title: 'Upsert ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'w-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'w-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'w-si-Comprehension', Direction: 'input',  Side: 'left-top',    Label: 'Comprehension' }
+					  ],
+					  Data: {
+						TargetBeaconName: pOperation.TargetBeaconName || '',
+						ConnectionHash:   pOperation.TargetConnectionHash || '',
+						Entity:           tmpEntity,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'end', Type: 'end', X: 1380, Y: 240, Width: 100, Height: 60, Title: 'End',
+					  Ports: [ { Hash: 'end-ei-in', Direction: 'input', Side: 'left-bottom' } ] }
+				],
+				Connections: [
+					// Event flow: pull source → pull related → intersect → comp → write → end.
+					// Serial pulls keep the engine model simple (no fork-join needed).
+					{ SourceNodeHash: 'start',         SourcePortHash: 'start-eo-out',   TargetNodeHash: 'pull-source',   TargetPortHash: 'ps-ei-Trigger' },
+					{ SourceNodeHash: 'pull-source',   SourcePortHash: 'ps-eo-Complete', TargetNodeHash: 'pull-related',  TargetPortHash: 'pr-ei-Trigger' },
+					{ SourceNodeHash: 'pull-related',  SourcePortHash: 'pr-eo-Complete', TargetNodeHash: 'intersect',     TargetPortHash: 'i-ei-Trigger' },
+					{ SourceNodeHash: 'intersect',     SourcePortHash: 'i-eo-Complete',  TargetNodeHash: 'comprehension', TargetPortHash: 'c-ei-Trigger' },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-eo-Complete',  TargetNodeHash: 'write',         TargetPortHash: 'w-ei-Trigger' },
+					{ SourceNodeHash: 'write',         SourcePortHash: 'w-eo-Complete',  TargetNodeHash: 'end',           TargetPortHash: 'end-ei-in' },
+
+					// State (data) flow — two state edges feeding intersect.
+					{ SourceNodeHash: 'pull-source',   SourcePortHash: 'ps-so-Result',       TargetNodeHash: 'intersect',     TargetPortHash: 'i-si-SourceRecords',  ConnectionType: 'State', Data: { StateKey: 'SourceRecords' } },
+					{ SourceNodeHash: 'pull-related',  SourcePortHash: 'pr-so-Result',       TargetNodeHash: 'intersect',     TargetPortHash: 'i-si-RelatedRecords', ConnectionType: 'State', Data: { StateKey: 'RelatedRecords' } },
+					{ SourceNodeHash: 'intersect',     SourcePortHash: 'i-so-Result',        TargetNodeHash: 'comprehension', TargetPortHash: 'c-si-Records',        ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-so-Comprehension', TargetNodeHash: 'write',         TargetPortHash: 'w-si-Comprehension',  ConnectionType: 'State', Data: { StateKey: 'Comprehension' } }
+				],
+				ViewState: { PanX: 0, PanY: 0, Zoom: 1 }
+			}
+		};
+	}
+
+	/**
 	 * Reduce a UV manifest's TaskOutputs (which can include the full
 	 * record arrays for each step) to just the count fields the UI
 	 * needs to render a result panel. Keeps the response small.
@@ -1032,9 +1901,14 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 			let tmpVal = pTaskOutputs[tmpKey];
 			if (!tmpVal || typeof tmpVal !== 'object') continue;
 			let tmpRow = {};
-			if ('RecordCount' in tmpVal) tmpRow.RecordCount = tmpVal.RecordCount;
-			if ('Written'     in tmpVal) tmpRow.Written     = tmpVal.Written;
-			if ('Errors'      in tmpVal)
+			if ('RecordCount'         in tmpVal) tmpRow.RecordCount         = tmpVal.RecordCount;
+			if ('FilteredOutCount'    in tmpVal) tmpRow.FilteredOutCount    = tmpVal.FilteredOutCount;
+			if ('GroupCount'          in tmpVal) tmpRow.GroupCount          = tmpVal.GroupCount;
+			if ('BucketCount'         in tmpVal) tmpRow.BucketCount         = tmpVal.BucketCount;
+			if ('MatchedSourceCount'  in tmpVal) tmpRow.MatchedSourceCount  = tmpVal.MatchedSourceCount;
+			if ('UnmatchedSourceCount' in tmpVal) tmpRow.UnmatchedSourceCount = tmpVal.UnmatchedSourceCount;
+			if ('Written'             in tmpVal) tmpRow.Written             = tmpVal.Written;
+			if ('Errors'           in tmpVal)
 			{
 				tmpRow.Errors = Array.isArray(tmpVal.Errors) ? tmpVal.Errors.length : (tmpVal.Errors || 0);
 			}

@@ -1,0 +1,55 @@
+{
+	"_comment": "Result of an Intersection (Limit=1) of WeatherReading × WeatherStation. Each row is one Reading with the station's CityName / StateName / StationCode attached. Used as the source for the WeatherSummaryByCity Aggregation and the WeatherReadingsByMonth Histogram demos.",
+
+	"SchemaName": "weather-reading-enriched",
+	"Version": 1,
+
+	"Tables":
+	[
+		{
+			"Scope": "WeatherReadingEnriched",
+			"DefaultIdentifier": "IDWeatherReadingEnriched",
+			"Domain": "Default",
+			"Schema":
+			[
+				{ "Column": "IDWeatherReadingEnriched",   "Type": "AutoIdentity", "Size": "Default" },
+				{ "Column": "GUIDWeatherReadingEnriched", "Type": "AutoGUID",     "Size": "255" },
+				{ "Column": "CreateDate",                 "Type": "CreateDate",   "Size": "Default" },
+				{ "Column": "CreatingIDUser",             "Type": "CreateIDUser", "Size": "int" },
+				{ "Column": "UpdateDate",                 "Type": "UpdateDate",   "Size": "Default" },
+				{ "Column": "UpdatingIDUser",             "Type": "UpdateIDUser", "Size": "int" },
+				{ "Column": "Deleted",                    "Type": "Deleted",      "Size": "Default" },
+				{ "Column": "DeleteDate",                 "Type": "DeleteDate",   "Size": "Default" },
+				{ "Column": "DeletingIDUser",             "Type": "DeleteIDUser", "Size": "int" },
+				{ "Column": "IDWeatherReading",           "Type": "Integer",      "Size": "int" },
+				{ "Column": "IDWeatherStation",           "Type": "Integer",      "Size": "int" },
+				{ "Column": "StationCode",                "Type": "String",       "Size": "16" },
+				{ "Column": "CityName",                   "Type": "String",       "Size": "128" },
+				{ "Column": "StateName",                  "Type": "String",       "Size": "64" },
+				{ "Column": "ReadingDate",                "Type": "DateTime",     "Size": "Default" },
+				{ "Column": "AvgTemperatureF",            "Type": "Decimal",      "Size": "5,1" },
+				{ "Column": "HighTemperatureF",           "Type": "Decimal",      "Size": "5,1" },
+				{ "Column": "LowTemperatureF",            "Type": "Decimal",      "Size": "5,1" },
+				{ "Column": "PrecipitationInches",        "Type": "Decimal",      "Size": "5,2" }
+			],
+			"DefaultObject":
+			{
+				"IDWeatherReadingEnriched": 0,
+				"GUIDWeatherReadingEnriched": "0x0000000000000000",
+				"CreateDate": null, "CreatingIDUser": 0,
+				"UpdateDate": null, "UpdatingIDUser": 0,
+				"Deleted": false, "DeleteDate": null, "DeletingIDUser": 0,
+				"IDWeatherReading": 0, "IDWeatherStation": 0,
+				"StationCode": "", "CityName": "", "StateName": "",
+				"ReadingDate": null,
+				"AvgTemperatureF": 0, "HighTemperatureF": 0, "LowTemperatureF": 0,
+				"PrecipitationInches": 0
+			},
+			"Indexes":
+			[
+				{ "Name": "UX_WeatherReadingEnriched_GUID", "Columns": ["GUIDWeatherReadingEnriched"], "Unique": true },
+				{ "Name": "IX_WeatherReadingEnriched_City",  "Columns": ["StateName", "CityName"] }
+			]
+		}
+	]
+}

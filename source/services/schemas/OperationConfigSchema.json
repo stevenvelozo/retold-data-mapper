@@ -1,0 +1,77 @@
+{
+	"_comment": "OperationConfig descriptor for the four typed operations (Extraction / Aggregation / Histogram / Intersection). Lives on the configs-databeacon, parallel to MappingConfig and DashboardConfig. Materialized via DataBeaconSchema:EnsureSchema; mirrored in /tmp/lab-data-platform/configs/init-platform-configs.sql for fresh deployments.",
+
+	"SchemaName": "data-mapper-operations",
+	"Version": 1,
+
+	"Tables":
+	[
+		{
+			"Scope": "OperationConfig",
+			"DefaultIdentifier": "IDOperationConfig",
+			"Domain": "Default",
+			"_comment": "Operator-authored intent doc. The data-mapper bridge compiles it into a UV Operation graph based on OperationType. UV owns execution; this table only captures intent.",
+			"Schema":
+			[
+				{ "Column": "IDOperationConfig",       "Type": "AutoIdentity", "Size": "Default" },
+				{ "Column": "GUIDOperationConfig",     "Type": "AutoGUID",     "Size": "36" },
+				{ "Column": "CreateDate",              "Type": "CreateDate",   "Size": "Default" },
+				{ "Column": "CreatingIDUser",          "Type": "CreateIDUser", "Size": "int" },
+				{ "Column": "UpdateDate",              "Type": "UpdateDate",   "Size": "Default" },
+				{ "Column": "UpdatingIDUser",          "Type": "UpdateIDUser", "Size": "int" },
+				{ "Column": "Deleted",                 "Type": "Deleted",      "Size": "Default" },
+				{ "Column": "DeleteDate",              "Type": "DeleteDate",   "Size": "Default" },
+				{ "Column": "DeletingIDUser",          "Type": "DeleteIDUser", "Size": "int" },
+				{ "Column": "Hash",                    "Type": "String",       "Size": "200" },
+				{ "Column": "Scope",                   "Type": "String",       "Size": "200" },
+				{ "Column": "Name",                    "Type": "String",       "Size": "200" },
+				{ "Column": "Description",             "Type": "String",       "Size": "Default" },
+				{ "Column": "OperationType",           "Type": "String",       "Size": "32" },
+				{ "Column": "SourceBeaconName",        "Type": "String",       "Size": "200" },
+				{ "Column": "SourceConnectionHash",    "Type": "String",       "Size": "200" },
+				{ "Column": "SourceEntity",            "Type": "String",       "Size": "200" },
+				{ "Column": "TargetBeaconName",        "Type": "String",       "Size": "200" },
+				{ "Column": "TargetConnectionHash",    "Type": "String",       "Size": "200" },
+				{ "Column": "TargetTable",             "Type": "String",       "Size": "200" },
+				{ "Column": "OperationConfiguration",  "Type": "String",       "Size": "Default" }
+			],
+			"DefaultObject":
+			{
+				"IDOperationConfig": 0,
+				"GUIDOperationConfig": "0x0000000000000000",
+				"CreateDate": null,
+				"CreatingIDUser": 0,
+				"UpdateDate": null,
+				"UpdatingIDUser": 0,
+				"Deleted": false,
+				"DeleteDate": null,
+				"DeletingIDUser": 0,
+				"Hash": "",
+				"Scope": "",
+				"Name": "",
+				"Description": "",
+				"OperationType": "",
+				"SourceBeaconName": "",
+				"SourceConnectionHash": "",
+				"SourceEntity": "",
+				"TargetBeaconName": "",
+				"TargetConnectionHash": "",
+				"TargetTable": "",
+				"OperationConfiguration": "{}"
+			},
+			"Indexes":
+			[
+				{ "Name": "UX_OperationConfig_ScopeHash", "Columns": ["Scope", "Hash"], "Unique": true },
+				{ "Name": "IX_OperationConfig_Type",      "Columns": ["OperationType"] }
+			]
+		}
+	],
+
+	"_notes":
+	{
+		"OperationType":            "One of: Extraction | Aggregation | Histogram | Intersection. The data-mapper bridge dispatches by this value at compile time.",
+		"OperationConfiguration":   "Type-specific JSON blob. See PLAN-PHASE-2B-Operation-Types.md §3 for the per-type shape.",
+		"TargetTable":              "Lake table name where the result lands. The data-mapper ensures this table on the target beacon (typically lake-databeacon) via DataBeaconSchema:EnsureSchema before the first run.",
+		"ScopeHashIndex":           "UNIQUE index UX_OperationConfig_ScopeHash matches the partial index in init-platform-configs.sql by name. EnsureSchema uses CREATE [UNIQUE] INDEX IF NOT EXISTS, so re-creating against an already-bootstrapped DB is a no-op."
+	}
+}

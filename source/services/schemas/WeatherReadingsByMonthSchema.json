@@ -1,0 +1,44 @@
+{
+	"_comment": "Histogram result: one row per (YearMonth, StateName) bucket — counts and avg temperature.",
+	"SchemaName": "weather-readings-by-month",
+	"Version": 1,
+	"Tables":
+	[
+		{
+			"Scope": "WeatherReadingsByMonth",
+			"DefaultIdentifier": "IDWeatherReadingsByMonth",
+			"Domain": "Default",
+			"Schema":
+			[
+				{ "Column": "IDWeatherReadingsByMonth",   "Type": "AutoIdentity", "Size": "Default" },
+				{ "Column": "GUIDWeatherReadingsByMonth", "Type": "AutoGUID",     "Size": "255" },
+				{ "Column": "CreateDate",   "Type": "CreateDate",   "Size": "Default" },
+				{ "Column": "CreatingIDUser","Type": "CreateIDUser","Size": "int" },
+				{ "Column": "UpdateDate",   "Type": "UpdateDate",   "Size": "Default" },
+				{ "Column": "UpdatingIDUser","Type": "UpdateIDUser","Size": "int" },
+				{ "Column": "Deleted",      "Type": "Deleted",      "Size": "Default" },
+				{ "Column": "DeleteDate",   "Type": "DeleteDate",   "Size": "Default" },
+				{ "Column": "DeletingIDUser","Type": "DeleteIDUser","Size": "int" },
+				{ "Column": "YearMonth",       "Type": "String",  "Size": "16" },
+				{ "Column": "StateName",       "Type": "String",  "Size": "64"  },
+				{ "Column": "ReadingCount",    "Type": "Integer", "Size": "int" },
+				{ "Column": "AvgTempF",        "Type": "Decimal", "Size": "6,2" },
+				{ "Column": "TotalPrecip",     "Type": "Decimal", "Size": "8,2" }
+			],
+			"DefaultObject":
+			{
+				"IDWeatherReadingsByMonth": 0,
+				"GUIDWeatherReadingsByMonth": "0x0000000000000000",
+				"CreateDate": null, "CreatingIDUser": 0,
+				"UpdateDate": null, "UpdatingIDUser": 0,
+				"Deleted": false, "DeleteDate": null, "DeletingIDUser": 0,
+				"YearMonth": "", "StateName": "",
+				"ReadingCount": 0, "AvgTempF": 0, "TotalPrecip": 0
+			},
+			"Indexes":
+			[
+				{ "Name": "UX_WeatherReadingsByMonth_GUID", "Columns": ["GUIDWeatherReadingsByMonth"], "Unique": true }
+			]
+		}
+	]
+}

@@ -1,0 +1,50 @@
+{
+	"_comment": "Intersection (Limit=3, OrderBy ReadingDate DESC) — top 3 most recent readings per station, denormalized.",
+	"SchemaName": "latest-readings-per-station",
+	"Version": 1,
+	"Tables":
+	[
+		{
+			"Scope": "LatestReadingsPerStation",
+			"DefaultIdentifier": "IDLatestReadingsPerStation",
+			"Domain": "Default",
+			"Schema":
+			[
+				{ "Column": "IDLatestReadingsPerStation",   "Type": "AutoIdentity", "Size": "Default" },
+				{ "Column": "GUIDLatestReadingsPerStation", "Type": "AutoGUID",     "Size": "255" },
+				{ "Column": "CreateDate",   "Type": "CreateDate",   "Size": "Default" },
+				{ "Column": "CreatingIDUser","Type": "CreateIDUser","Size": "int" },
+				{ "Column": "UpdateDate",   "Type": "UpdateDate",   "Size": "Default" },
+				{ "Column": "UpdatingIDUser","Type": "UpdateIDUser","Size": "int" },
+				{ "Column": "Deleted",      "Type": "Deleted",      "Size": "Default" },
+				{ "Column": "DeleteDate",   "Type": "DeleteDate",   "Size": "Default" },
+				{ "Column": "DeletingIDUser","Type": "DeleteIDUser","Size": "int" },
+				{ "Column": "IDWeatherStation",   "Type": "Integer", "Size": "int" },
+				{ "Column": "IDWeatherReading",   "Type": "Integer", "Size": "int" },
+				{ "Column": "StationCode",        "Type": "String",  "Size": "16" },
+				{ "Column": "CityName",           "Type": "String",  "Size": "128" },
+				{ "Column": "StateName",          "Type": "String",  "Size": "64" },
+				{ "Column": "ReadingDate",        "Type": "DateTime","Size": "Default" },
+				{ "Column": "AvgTempF",           "Type": "Decimal", "Size": "5,1" },
+				{ "Column": "HighTempF",          "Type": "Decimal", "Size": "5,1" },
+				{ "Column": "LowTempF",           "Type": "Decimal", "Size": "5,1" }
+			],
+			"DefaultObject":
+			{
+				"IDLatestReadingsPerStation": 0,
+				"GUIDLatestReadingsPerStation": "0x0000000000000000",
+				"CreateDate": null, "CreatingIDUser": 0,
+				"UpdateDate": null, "UpdatingIDUser": 0,
+				"Deleted": false, "DeleteDate": null, "DeletingIDUser": 0,
+				"IDWeatherStation": 0, "IDWeatherReading": 0,
+				"StationCode": "", "CityName": "", "StateName": "",
+				"ReadingDate": null,
+				"AvgTempF": 0, "HighTempF": 0, "LowTempF": 0
+			},
+			"Indexes":
+			[
+				{ "Name": "UX_LatestReadingsPerStation_GUID", "Columns": ["GUIDLatestReadingsPerStation"], "Unique": true }
+			]
+		}
+	]
+}
