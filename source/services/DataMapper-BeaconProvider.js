@@ -29,6 +29,27 @@ const libMeadowIntegrationAdapter = require('meadow-integration/source/Meadow-Se
 const libMeadowCloneRestClient    = require('meadow-integration/source/services/clone/Meadow-Service-RestClient.js');
 const libMeadowGUIDMap            = require('meadow-integration/source/Meadow-Service-Integration-GUIDMap.js');
 
+// In-memory row-count guard. The four typed transforms hold their
+// input set fully in memory (the architecture supports swapping in a
+// SQL-pushdown compute later, but for now: bounded). Configurable via
+// DATA_MAPPER_MAX_INMEMORY_ROWS env var. Default chosen to give 2.5×
+// headroom over the 100K stress-test target — beyond that the JS V8
+// heap, the JSON.parse cost on the State edge, and the meadow upsert
+// chunk loop all start to misbehave.
+const MAX_INMEMORY_ROWS = parseInt(process.env.DATA_MAPPER_MAX_INMEMORY_ROWS, 10) || 250000;
+
+function _checkRowCount(pAction, pCount)
+{
+	if (pCount > MAX_INMEMORY_ROWS)
+	{
+		return new Error(
+			`${pAction}: input row count ${pCount} exceeds DATA_MAPPER_MAX_INMEMORY_ROWS=${MAX_INMEMORY_ROWS}. ` +
+			`The current in-memory transform path can't safely process this volume. ` +
+			`Either raise the env var (and accept higher memory pressure) or compose smaller input sets via Extraction/Filter upstream.`);
+	}
+	return null;
+}
+
 let libTabularTransform = null;
 try
 {
@@ -204,11 +225,12 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
+							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
 							let tmpBeaconName = tmpSettings.SourceBeaconName;
 							let tmpConnectionHash = tmpSettings.ConnectionHash;
 							let tmpEntity = tmpSettings.Entity;
-							let tmpBatchSize = tmpSettings.BatchSize || 100;
+							let tmpBatchSize = tmpSettings.BatchSize || 500;
 							let tmpFilterSegment = tmpSettings.FilterExpression
 								? '/FilteredTo/' + tmpSettings.FilterExpression
 								: '';
@@ -216,7 +238,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							if (!tmpSelf._Client || !tmpBeaconName || !tmpConnectionHash || !tmpEntity)
 							{
 								return fHandlerCallback(null, {
-									Outputs: { Records: [], RecordCount: 0 },
+									Outputs: { Records: [], RecordCount: 0, ElapsedMs: 0 },
 									Log: ['PullRecords: missing required settings.']
 								});
 							}
@@ -246,7 +268,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 										if (pError)
 										{
 											return fHandlerCallback(null, {
-												Outputs: { Records: tmpAllRecords, RecordCount: tmpAllRecords.length },
+												Outputs: { Records: tmpAllRecords, RecordCount: tmpAllRecords.length, ElapsedMs: Date.now() - tmpStartMs },
 												Log: [`PullRecords: read error at offset ${tmpOffset}: ${pError.message}`]
 											});
 										}
@@ -266,9 +288,23 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 
 										if (tmpRecords.length < tmpBatchSize)
 										{
+											let tmpElapsedMs = Date.now() - tmpStartMs;
+											// Important: only emit Result (the
+											// stringified records) over the wire,
+											// not Records itself. UV's State edge
+											// reads `Outputs.Result` (the port is
+											// `p-so-Result`); the downstream
+											// transform action JSON.parses it back
+											// into an array. Sending Records
+											// alongside Result *doubles* the WS
+											// payload — at 100K rows that's enough
+											// to breach the WS keep-alive budget
+											// and triggers `Failed to report
+											// completion: socket hang up` on the
+											// beacon side.
 											return fHandlerCallback(null, {
-												Outputs: { Records: tmpAllRecords, RecordCount: tmpAllRecords.length, Result: JSON.stringify(tmpAllRecords) },
-												Log: [`PullRecords: read ${tmpAllRecords.length} records from ${tmpEntity} on beacon [${tmpBeaconName}].`]
+												Outputs: { RecordCount: tmpAllRecords.length, ElapsedMs: tmpElapsedMs, Result: JSON.stringify(tmpAllRecords) },
+												Log: [`PullRecords: read ${tmpAllRecords.length} records from ${tmpEntity} on beacon [${tmpBeaconName}] in ${tmpElapsedMs}ms.`]
 											});
 										}
 
@@ -291,10 +327,11 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'Entity',           DataType: 'String', Required: false, Description: 'Target entity name. Informational when Comprehension is supplied; meadow upserts each entity in the comprehension by its key.' },
 							{ Name: 'Comprehension',    DataType: 'Object', Required: false, Description: 'Comprehension { <Entity>: { <GUID>: <record>, ... } }. Preferred input; flows from the BuildComprehension node.' },
 							{ Name: 'Records',          DataType: 'Array',  Required: false, Description: 'Back-compat: bare records array. If provided without Comprehension, will be wrapped into { <Entity>: { <i>: <record> } }.' },
-							{ Name: 'BulkChunkSize',    DataType: 'Number', Required: false, Description: 'Records per bulk Upserts call. Default 100. Lower for very wide rows; higher for narrow rows on a fast target.' }
+							{ Name: 'BulkChunkSize',    DataType: 'Number', Required: false, Description: 'Records per bulk Upserts call. Default 500 (tuned for the 100K stress-test target). Lower for very wide rows or slow targets; higher only after profiling. Each chunk is one PUT roundtrip through MeadowProxy.' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
+							let tmpStartMs = Date.now();
 							let tmpSettings  = pWorkItem.Settings || {};
 							let tmpBeaconName = tmpSettings.TargetBeaconName;
 							let tmpConnHash   = tmpSettings.ConnectionHash;
@@ -348,15 +385,17 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{
 								if (tmpEntityIdx >= tmpEntityKeys.length)
 								{
+									let tmpElapsedMs = Date.now() - tmpStartMs;
 									return fHandlerCallback(null, {
 										Outputs: {
 											Written:          tmpTotalWritten,
 											Errors:           tmpTotalErrors,
 											ErrorLog:         tmpErrorLog,
 											EntitiesWritten:  tmpEntitiesWritten,
-											PerEntity:        tmpEntityCounts
+											PerEntity:        tmpEntityCounts,
+											ElapsedMs:        tmpElapsedMs
 										},
-										Log: [`WriteRecords (Upsert → ${tmpBeaconName}/${tmpConnHash}): ${tmpTotalWritten} written across ${tmpEntitiesWritten.length} entity(ies), ${tmpTotalErrors} errors.`]
+										Log: [`WriteRecords (Upsert → ${tmpBeaconName}/${tmpConnHash}): ${tmpTotalWritten} written across ${tmpEntitiesWritten.length} entity(ies), ${tmpTotalErrors} errors, in ${tmpElapsedMs}ms.`]
 									});
 								}
 								let tmpEntity = tmpEntityKeys[tmpEntityIdx];
@@ -378,7 +417,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								// Chunked into BulkChunkSize batches so very
 								// large comprehensions don't blow timeouts.
 								let tmpPath = `/1.0/${tmpConnHash}/${tmpEntity}/Upserts`;
-								let tmpChunkSize = tmpSettings.BulkChunkSize || 100;
+								let tmpChunkSize = tmpSettings.BulkChunkSize || 500;
 								let tmpEntityWritten = 0;
 								let tmpEntityErrors  = 0;
 								let tmpChunkOffset = 0;
@@ -590,6 +629,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
+							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
 							let tmpRecords = tmpSettings.Records || [];
 							let tmpCfg = tmpSettings.OperationConfiguration || {};
@@ -601,6 +641,12 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							if (typeof (tmpCfg) === 'string')
 							{
 								try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpFable.log.error(`ExtractRecords: OperationConfiguration parse error: ${e.message}`); tmpCfg = {}; }
+							}
+
+							if (Array.isArray(tmpRecords))
+							{
+								let tmpGuard = _checkRowCount('ExtractRecords', tmpRecords.length);
+								if (tmpGuard) return fHandlerCallback(tmpGuard);
 							}
 
 							let tmpEntity = tmpCfg.Entity || 'Record';
@@ -736,16 +782,20 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								}
 							}
 
+							let tmpElapsedMs = Date.now() - tmpStartMs;
+							// Records is redundant with Result over the wire —
+							// the State edge reads Result. Drop Records to halve
+							// the WS payload at 100K-row scale.
 							return fHandlerCallback(null, {
 								Outputs:
 								{
-									Records:          tmpKept,
 									RecordCount:      tmpKept.length,
 									FilteredOutCount: tmpFilteredOut,
 									Errors:           tmpErrors,
+									ElapsedMs:        tmpElapsedMs,
 									Result:           JSON.stringify(tmpKept)
 								},
-								Log: [`ExtractRecords: kept ${tmpKept.length} of ${tmpRecords.length} (filtered out ${tmpFilteredOut}, errors ${tmpErrors.length}).`]
+								Log: [`ExtractRecords: kept ${tmpKept.length} of ${tmpRecords.length} (filtered out ${tmpFilteredOut}, errors ${tmpErrors.length}) in ${tmpElapsedMs}ms.`]
 							});
 						}
 					},
@@ -760,6 +810,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
+							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
 							let tmpRecords = tmpSettings.Records || [];
 							let tmpCfg = tmpSettings.OperationConfiguration || {};
@@ -776,10 +827,12 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							if (!Array.isArray(tmpRecords))
 							{
 								return fHandlerCallback(null, {
-									Outputs: { Records: [], RecordCount: 0, GroupCount: 0, Result: '[]' },
+									Outputs: { Records: [], RecordCount: 0, GroupCount: 0, ElapsedMs: 0, Result: '[]' },
 									Log: [`AggregateRecords: input Records was not an array.`]
 								});
 							}
+							let tmpGuard = _checkRowCount('AggregateRecords', tmpRecords.length);
+							if (tmpGuard) return fHandlerCallback(tmpGuard);
 
 							// Build groups keyed by joined GroupBy values. The
 							// key is a JSON-encoded array of values so collisions
@@ -878,15 +931,16 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								tmpOut.push(tmpResult);
 							}
 
+							let tmpElapsedMs = Date.now() - tmpStartMs;
 							return fHandlerCallback(null, {
 								Outputs:
 								{
-									Records:     tmpOut,
 									RecordCount: tmpOut.length,
 									GroupCount:  tmpOut.length,
+									ElapsedMs:   tmpElapsedMs,
 									Result:      JSON.stringify(tmpOut)
 								},
-								Log: [`AggregateRecords: ${tmpRecords.length} input rows → ${tmpOut.length} groups across ${tmpGroupBy.length} GroupBy field(s) and ${tmpAggs.length} aggregate(s).`]
+								Log: [`AggregateRecords: ${tmpRecords.length} input rows → ${tmpOut.length} groups across ${tmpGroupBy.length} GroupBy field(s) and ${tmpAggs.length} aggregate(s) in ${tmpElapsedMs}ms.`]
 							});
 						}
 					},
@@ -901,6 +955,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
+							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
 							let tmpRecords = tmpSettings.Records || [];
 							let tmpCfg = tmpSettings.OperationConfiguration || {};
@@ -920,10 +975,12 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							if (!Array.isArray(tmpRecords) || !tmpBucketCol)
 							{
 								return fHandlerCallback(null, {
-									Outputs: { Records: [], RecordCount: 0, BucketCount: 0, Result: '[]' },
+									Outputs: { Records: [], RecordCount: 0, BucketCount: 0, ElapsedMs: 0, Result: '[]' },
 									Log: [`HistogramRecords: missing Records array or BucketColumn.`]
 								});
 							}
+							let tmpGuard = _checkRowCount('HistogramRecords', tmpRecords.length);
+							if (tmpGuard) return fHandlerCallback(tmpGuard);
 
 							// Compute the bucket key for one row.
 							let fBucket = (pVal) =>
@@ -1034,15 +1091,16 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								return tmpAk < tmpBk ? -1 : tmpAk > tmpBk ? 1 : 0;
 							});
 
+							let tmpElapsedMs = Date.now() - tmpStartMs;
 							return fHandlerCallback(null, {
 								Outputs:
 								{
-									Records:     tmpOut,
 									RecordCount: tmpOut.length,
 									BucketCount: tmpOut.length,
+									ElapsedMs:   tmpElapsedMs,
 									Result:      JSON.stringify(tmpOut)
 								},
-								Log: [`HistogramRecords: ${tmpRecords.length} rows → ${tmpOut.length} (Bucket × Group) cells via ${tmpBucketKind} on ${tmpBucketCol}.`]
+								Log: [`HistogramRecords: ${tmpRecords.length} rows → ${tmpOut.length} (Bucket × Group) cells via ${tmpBucketKind} on ${tmpBucketCol} in ${tmpElapsedMs}ms.`]
 							});
 						}
 					},
@@ -1058,6 +1116,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
+							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
 							let tmpSource = tmpSettings.SourceRecords || [];
 							let tmpRelated = tmpSettings.RelatedRecords || [];
@@ -1079,10 +1138,17 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							if (!Array.isArray(tmpSource) || !Array.isArray(tmpRelated))
 							{
 								return fHandlerCallback(null, {
-									Outputs: { Records: [], RecordCount: 0, MatchedSourceCount: 0, UnmatchedSourceCount: 0, Result: '[]' },
+									Outputs: { Records: [], RecordCount: 0, MatchedSourceCount: 0, UnmatchedSourceCount: 0, ElapsedMs: 0, Result: '[]' },
 									Log: [`IntersectRecords: SourceRecords or RelatedRecords missing.`]
 								});
 							}
+							// Guard both sides — Intersection holds source AND
+							// related fully in memory (the related index is ~O(R)
+							// and the per-source loop pulls into match arrays).
+							let tmpGuardS = _checkRowCount('IntersectRecords (Source)', tmpSource.length);
+							if (tmpGuardS) return fHandlerCallback(tmpGuardS);
+							let tmpGuardR = _checkRowCount('IntersectRecords (Related)', tmpRelated.length);
+							if (tmpGuardR) return fHandlerCallback(tmpGuardR);
 
 							// Index Related rows by RelatedField → [rows].
 							let tmpIndex = {};
@@ -1168,16 +1234,17 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								}
 							}
 
+							let tmpElapsedMs = Date.now() - tmpStartMs;
 							return fHandlerCallback(null, {
 								Outputs:
 								{
-									Records:              tmpOut,
 									RecordCount:          tmpOut.length,
 									MatchedSourceCount:   tmpMatchedCount,
 									UnmatchedSourceCount: tmpUnmatchedCount,
+									ElapsedMs:            tmpElapsedMs,
 									Result:               JSON.stringify(tmpOut)
 								},
-								Log: [`IntersectRecords: ${tmpSource.length} source × ${tmpRelated.length} related → ${tmpOut.length} joined rows (${tmpMatchedCount} sources matched, ${tmpUnmatchedCount} unmatched, Limit=${tmpLimit || '∞'}).`]
+								Log: [`IntersectRecords: ${tmpSource.length} source × ${tmpRelated.length} related → ${tmpOut.length} joined rows (${tmpMatchedCount} sources matched, ${tmpUnmatchedCount} unmatched, Limit=${tmpLimit || '∞'}) in ${tmpElapsedMs}ms.`]
 							});
 						}
 					},

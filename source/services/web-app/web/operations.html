@@ -296,6 +296,7 @@ function renderResult(b)
 		if ('MatchedSourceCount'  in m) parts.push(`<span class="k">matched</span><span class="v">${m.MatchedSourceCount}</span>`);
 		if ('UnmatchedSourceCount' in m && m.UnmatchedSourceCount) parts.push(`<span class="k">unmatched</span><span class="v">${m.UnmatchedSourceCount}</span>`);
 		if ('Written'             in m) parts.push(`<span class="k">written</span><span class="v">${m.Written}</span>`);
+		if ('ElapsedMs'           in m) parts.push(`<span class="k">elapsed</span><span class="v">${m.ElapsedMs}ms</span>`);
 		const hasErrs = ('Errors' in m && m.Errors);
 		if (hasErrs) parts.push(`<span class="k">errors</span><span class="v">${m.Errors}</span>`);
 		return `<span class="metric${hasErrs ? ' errs' : ''}"><b>${k}</b> · ${parts.join(' ')}</span>`;

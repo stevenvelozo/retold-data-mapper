@@ -109,6 +109,38 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 	{
 		let tmpRoutePrefix = this.options.RoutePrefix;
 
+		// ── Write-side auth gate ────────────────────────────────
+		//
+		// If DATA_MAPPER_WRITE_TOKEN is set in the env, every
+		// non-GET request under <RoutePrefix>/* must carry
+		// `Authorization: Bearer <token>`. Reads stay open so the
+		// dashboards (and dashboard-databeacon's panel-data fetches)
+		// don't need credentials. If the env var is unset we log a
+		// warning at startup — the gate is opt-in, not opt-out, to
+		// stay backwards-compatible with the existing demo flow.
+		let tmpWriteToken = process.env.DATA_MAPPER_WRITE_TOKEN || '';
+		if (!tmpWriteToken)
+		{
+			this.fable.log.warn('DataMapper ConnectionBridge: DATA_MAPPER_WRITE_TOKEN not set — writes on ' + tmpRoutePrefix + '/* are unauthenticated. Set the env var to enable bearer-token auth on POST/PUT/DELETE.');
+		}
+		else
+		{
+			this.fable.log.info('DataMapper ConnectionBridge: bearer-token auth enabled for writes on ' + tmpRoutePrefix + '/*.');
+		}
+
+		pOratorServiceServer.server.use((pRequest, pResponse, fNext) =>
+		{
+			if (!tmpWriteToken) return fNext();
+			let tmpUrl = pRequest.url || '';
+			if (tmpUrl.indexOf(tmpRoutePrefix + '/') !== 0 && tmpUrl !== tmpRoutePrefix) return fNext();
+			let tmpMethod = pRequest.method || '';
+			if (tmpMethod === 'GET' || tmpMethod === 'HEAD' || tmpMethod === 'OPTIONS') return fNext();
+			let tmpAuth = (pRequest.headers && (pRequest.headers.authorization || pRequest.headers.Authorization)) || '';
+			if (tmpAuth === 'Bearer ' + tmpWriteToken) return fNext();
+			pResponse.send(401, { Error: 'Unauthorized — POST/PUT/DELETE on ' + tmpRoutePrefix + '/* requires Authorization: Bearer <DATA_MAPPER_WRITE_TOKEN>.' });
+			return fNext(false);
+		});
+
 		// ── Ultravisor connection management ────────────────────
 
 		pOratorServiceServer.doPost(`${tmpRoutePrefix}/ultravisor/connect`,
@@ -1008,6 +1040,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 				if (!tmpBody.OperationType) return _self._sendError(pResponse, 400, 'POST /mapper/operations requires OperationType', fNext);
 				let tmpQueryScope = (pRequest.query && pRequest.query.scope !== undefined && pRequest.query.scope !== '*')
 					? String(pRequest.query.scope) : '';
+				let tmpSkipValidation = !!(pRequest.query && (pRequest.query.skipValidation === '1' || pRequest.query.skipValidation === 'true'));
 				let tmpRecord =
 				{
 					Hash:                 String(tmpBody.Hash),
@@ -1025,14 +1058,27 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						? tmpBody.OperationConfiguration
 						: JSON.stringify(tmpBody.OperationConfiguration || {})
 				};
-				beaconRequestEx('configs-databeacon', 'POST',
-					'/1.0/platform-configs/OperationConfig', tmpRecord,
-					(pError, pResult) =>
-					{
-						if (pError) return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
-						pResponse.send({ Success: true, Operation: pResult });
-						return fNext();
-					});
+
+				let fPersist = (pValidationWarning) =>
+				{
+					beaconRequestEx('configs-databeacon', 'POST',
+						'/1.0/platform-configs/OperationConfig', tmpRecord,
+						(pError, pResult) =>
+						{
+							if (pError) return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
+							let tmpResp = { Success: true, Operation: pResult };
+							if (pValidationWarning) tmpResp.ValidationWarning = pValidationWarning;
+							pResponse.send(tmpResp);
+							return fNext();
+						});
+				};
+
+				if (tmpSkipValidation) return fPersist('Validation skipped via ?skipValidation=1.');
+				_self._validateAgainstTarget(tmpRecord, (pValidationErr, pWarning) =>
+				{
+					if (pValidationErr) return _self._sendError(pResponse, 400, pValidationErr.message, fNext);
+					return fPersist(pWarning || null);
+				});
 			});
 
 		// PUT /mapper/operation/:id — update by primary key.
@@ -1047,6 +1093,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 				let tmpID = parseInt(pRequest.params.id, 10);
 				if (!tmpID) return _self._sendError(pResponse, 400, 'PUT /mapper/operation/:id requires numeric ID', fNext);
 				let tmpBody = pRequest.body || {};
+				let tmpSkipValidation = !!(pRequest.query && (pRequest.query.skipValidation === '1' || pRequest.query.skipValidation === 'true'));
 
 				beaconRequestEx('configs-databeacon', 'GET',
 					'/1.0/platform-configs/OperationConfig/' + tmpID, null,
@@ -1075,20 +1122,32 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 								: JSON.stringify(tmpBody.OperationConfiguration))
 							: pExisting.OperationConfiguration;
 
-						beaconRequestEx('configs-databeacon', 'DELETE',
-							'/1.0/platform-configs/OperationConfig/' + tmpID, null,
-							(pDelErr) =>
-							{
-								if (pDelErr) return _self._sendError(pResponse, 502, pDelErr.message || String(pDelErr), fNext);
-								beaconRequestEx('configs-databeacon', 'POST',
-									'/1.0/platform-configs/OperationConfig', tmpMerged,
-									(pInsErr, pInserted) =>
-									{
-										if (pInsErr) return _self._sendError(pResponse, 502, pInsErr.message || String(pInsErr), fNext);
-										pResponse.send({ Success: true, Operation: pInserted });
-										return fNext();
-									});
-							});
+						let fPersist = (pValidationWarning) =>
+						{
+							beaconRequestEx('configs-databeacon', 'DELETE',
+								'/1.0/platform-configs/OperationConfig/' + tmpID, null,
+								(pDelErr) =>
+								{
+									if (pDelErr) return _self._sendError(pResponse, 502, pDelErr.message || String(pDelErr), fNext);
+									beaconRequestEx('configs-databeacon', 'POST',
+										'/1.0/platform-configs/OperationConfig', tmpMerged,
+										(pInsErr, pInserted) =>
+										{
+											if (pInsErr) return _self._sendError(pResponse, 502, pInsErr.message || String(pInsErr), fNext);
+											let tmpResp = { Success: true, Operation: pInserted };
+											if (pValidationWarning) tmpResp.ValidationWarning = pValidationWarning;
+											pResponse.send(tmpResp);
+											return fNext();
+										});
+								});
+						};
+
+						if (tmpSkipValidation) return fPersist('Validation skipped via ?skipValidation=1.');
+						_self._validateAgainstTarget(tmpMerged, (pValidationErr, pWarning) =>
+						{
+							if (pValidationErr) return _self._sendError(pResponse, 400, pValidationErr.message, fNext);
+							return fPersist(pWarning || null);
+						});
 					});
 			});
 
@@ -1469,7 +1528,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						SourceBeaconName: pOperation.SourceBeaconName || '',
 						ConnectionHash:   pOperation.SourceConnectionHash || '',
 						Entity:           pOperation.SourceEntity || '',
-						BatchSize:        100,
+						BatchSize:        500,
 						AffinityKey:      'data-mapper'
 					  }
 					},
@@ -1886,6 +1945,136 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 	}
 
 	/**
+	 * Compute the set of column names an OperationConfig will write
+	 * to its TargetTable. Each OperationType has its own output shape:
+	 *   - Extraction:    Object.keys(Projection) + GUIDName
+	 *   - Aggregation:   GroupBy + Aggregates.As + GUIDName
+	 *   - Histogram:     BucketAs + GroupBy + Aggregates.As + GUIDName
+	 *   - Intersection:  Object.keys(Projection) + GUIDName
+	 * Returns an array of strings (deduplicated). Audit columns
+	 * (CreateDate / UpdateDate / GUID — the auto-managed meadow side)
+	 * are not included; those are injected by meadow itself on insert.
+	 */
+	_declaredOutputColumns(pOperation)
+	{
+		let tmpCfg = pOperation.OperationConfiguration || {};
+		if (typeof tmpCfg === 'string') { try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpCfg = {}; } }
+		let tmpType = String(pOperation.OperationType || '').toLowerCase();
+		let tmpEntity = tmpCfg.Entity || pOperation.TargetTable || 'X';
+		let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+		let tmpSet = new Set();
+		tmpSet.add(tmpGUIDName);
+
+		if (tmpType === 'extraction' || tmpType === 'intersection')
+		{
+			let tmpProj = tmpCfg.Projection || {};
+			Object.keys(tmpProj).forEach((k) => tmpSet.add(k));
+		}
+		else if (tmpType === 'aggregation')
+		{
+			let tmpGroupBy = Array.isArray(tmpCfg.GroupBy) ? tmpCfg.GroupBy : [];
+			let tmpAggs = Array.isArray(tmpCfg.Aggregates) ? tmpCfg.Aggregates : [];
+			tmpGroupBy.forEach((g) => tmpSet.add(g));
+			tmpAggs.forEach((a) => tmpSet.add(a.As || (String(a.Function || a.Op || 'op').toLowerCase() + '_' + (a.Source || 'col'))));
+		}
+		else if (tmpType === 'histogram')
+		{
+			tmpSet.add(tmpCfg.BucketAs || 'Bucket');
+			let tmpGroupBy = Array.isArray(tmpCfg.GroupBy) ? tmpCfg.GroupBy : [];
+			let tmpAggs = Array.isArray(tmpCfg.Aggregates) ? tmpCfg.Aggregates : [];
+			tmpGroupBy.forEach((g) => tmpSet.add(g));
+			tmpAggs.forEach((a) => tmpSet.add(a.As || (String(a.Function || a.Op || 'op').toLowerCase() + '_' + (a.Source || 'col'))));
+		}
+		return Array.from(tmpSet);
+	}
+
+	/**
+	 * Validate that the OperationConfig's declared output columns
+	 * exist on the TargetTable. Forward-pass: if the table doesn't
+	 * exist on the target beacon yet, allow save (the operation may
+	 * be staged before EnsureSchema runs). If the table DOES exist,
+	 * any declared column missing from it → fail with 400.
+	 *
+	 * Two dispatches via the UV mesh: ListConnections (to resolve
+	 * ConnectionHash → IDBeaconConnection) and Introspect (to read
+	 * the table list). Skips silently if TargetBeaconName is empty.
+	 *
+	 * fCallback signature: function(pError | null, pWarning | null)
+	 *   pError   — Error to surface as 400; aborts the save
+	 *   pWarning — string flagged in the response (table not found etc.)
+	 */
+	_validateAgainstTarget(pOperation, fCallback)
+	{
+		let tmpBeacon = pOperation.TargetBeaconName;
+		let tmpHash = pOperation.TargetConnectionHash;
+		let tmpTable = pOperation.TargetTable;
+		if (!tmpBeacon || !tmpHash || !tmpTable)
+		{
+			return fCallback(null, 'TargetBeaconName / TargetConnectionHash / TargetTable not all set — skipped column validation.');
+		}
+
+		let tmpDeclared = this._declaredOutputColumns(pOperation);
+		if (tmpDeclared.length === 0)
+		{
+			return fCallback(null, 'OperationConfiguration declared no output columns — skipped column validation.');
+		}
+
+		let _self = this;
+		this._dispatch(
+			{
+				Capability: 'DataBeaconAccess',
+				Action:     'ListConnections',
+				Settings:   {},
+				AffinityKey: tmpBeacon,
+				TimeoutMs:   15000
+			},
+			(pListErr, pListResult) =>
+			{
+				if (pListErr) return fCallback(null, 'ListConnections on ' + tmpBeacon + ' failed: ' + pListErr.message + ' — skipped column validation.');
+				let tmpConns = ((pListResult && pListResult.Outputs) || pListResult || {}).Connections || [];
+				let tmpMatch = tmpConns.find((c) =>
+				{
+					let tmpSlug = String(c.Name || '').toLowerCase().replace(/\s+/g, '-');
+					return tmpSlug === tmpHash || c.Name === tmpHash || String(c.Hash || '') === tmpHash;
+				});
+				if (!tmpMatch)
+				{
+					return fCallback(null, 'No connection on ' + tmpBeacon + ' matches "' + tmpHash + '" — skipped column validation.');
+				}
+
+				_self._dispatch(
+					{
+						Capability: 'DataBeaconManagement',
+						Action:     'Introspect',
+						Settings:   { IDBeaconConnection: tmpMatch.IDBeaconConnection },
+						AffinityKey: tmpBeacon,
+						TimeoutMs:   30000
+					},
+					(pIntErr, pIntResult) =>
+					{
+						if (pIntErr) return fCallback(null, 'Introspect on ' + tmpBeacon + ' failed: ' + pIntErr.message + ' — skipped column validation.');
+						let tmpTables = ((pIntResult && pIntResult.Outputs) || pIntResult || {}).Tables || [];
+						let tmpHit = tmpTables.find((t) => (t.TableName === tmpTable) || (t.Name === tmpTable));
+						if (!tmpHit)
+						{
+							return fCallback(null, 'TargetTable "' + tmpTable + '" not yet on ' + tmpBeacon + '/' + tmpHash + ' — save allowed; ensure-schema before first run.');
+						}
+						let tmpExisting = new Set((tmpHit.Columns || []).map((c) => c.Name || c.Column));
+						let tmpMissing = tmpDeclared.filter((c) => !tmpExisting.has(c));
+						if (tmpMissing.length > 0)
+						{
+							return fCallback(new Error(
+								'OperationConfiguration declares output columns missing from TargetTable "' + tmpTable + '": ' +
+								tmpMissing.join(', ') +
+								'. Either update the OperationConfiguration to drop them, ' +
+								'or run /mapper/admin/ensure-schema with an updated descriptor first.'));
+						}
+						return fCallback(null, null);
+					});
+			});
+	}
+
+	/**
 	 * Reduce a UV manifest's TaskOutputs (which can include the full
 	 * record arrays for each step) to just the count fields the UI
 	 * needs to render a result panel. Keeps the response small.
@@ -1908,6 +2097,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 			if ('MatchedSourceCount'  in tmpVal) tmpRow.MatchedSourceCount  = tmpVal.MatchedSourceCount;
 			if ('UnmatchedSourceCount' in tmpVal) tmpRow.UnmatchedSourceCount = tmpVal.UnmatchedSourceCount;
 			if ('Written'             in tmpVal) tmpRow.Written             = tmpVal.Written;
+			if ('ElapsedMs'           in tmpVal) tmpRow.ElapsedMs           = tmpVal.ElapsedMs;
 			if ('Errors'           in tmpVal)
 			{
 				tmpRow.Errors = Array.isArray(tmpVal.Errors) ? tmpVal.Errors.length : (tmpVal.Errors || 0);
