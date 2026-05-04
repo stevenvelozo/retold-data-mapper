@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Retold Operations</title>
+	<style>
+		html, body { background: #0e1a2b; margin: 0; padding: 0; min-height: 100vh; color: #f8fafc;
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+		.wrap { max-width: 1320px; margin: 0 auto; padding: 24px; }
+		h1 { font-size: 22px; margin: 0 0 4px 0; font-weight: 600; }
+		.sub { color: #94a3b8; margin-bottom: 18px; }
+		.tabs { display: flex; gap: 4px; margin-bottom: 16px; flex-wrap: wrap; }
+		.tab { padding: 6px 14px; border-radius: 4px; cursor: pointer; background: #16213e; color: #cbd5e1;
+			border: 1px solid #1e293b; font-size: 12px; }
+		.tab.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+		.tab .badge { display: inline-block; margin-left: 6px; background: rgba(0,0,0,.25);
+			padding: 1px 6px; border-radius: 8px; font-size: 11px; }
+		.toolbar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+		.btn { padding: 7px 14px; border-radius: 4px; border: 1px solid transparent; background: #1d4ed8;
+			color: #fff; cursor: pointer; font-size: 12px; font-weight: 500; }
+		.btn:hover { background: #1e40af; }
+		.btn.secondary { background: #334155; }
+		.btn.secondary:hover { background: #475569; }
+		.btn.danger { background: #b91c1c; }
+		.btn.danger:hover { background: #991b1b; }
+		.btn.run { background: #15803d; }
+		.btn.run:hover { background: #166534; }
+		.btn:disabled { background: #1e293b; color: #64748b; cursor: not-allowed; }
+		.card { background: #16213e; border: 1px solid #1e293b; border-radius: 6px; padding: 14px 16px;
+			margin-bottom: 10px; }
+		.card-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+		.card-name { font-size: 15px; font-weight: 600; color: #f8fafc; }
+		.type-pill { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;
+			text-transform: uppercase; letter-spacing: 0.5px; }
+		.type-extraction   { background: #1e3a8a; color: #93c5fd; }
+		.type-aggregation  { background: #14532d; color: #86efac; }
+		.type-histogram    { background: #92400e; color: #fed7aa; }
+		.type-intersection { background: #5b21b6; color: #c4b5fd; }
+		.card-meta { color: #94a3b8; font-size: 11px; margin-bottom: 6px; }
+		.card-desc { color: #cbd5e1; font-size: 12px; margin-bottom: 10px; }
+		.card-flow { font-family: 'SF Mono', monospace; font-size: 11px; color: #94a3b8;
+			background: #0e1a2b; padding: 6px 10px; border-radius: 4px; margin-bottom: 10px; word-break: break-all; }
+		.card-flow code { color: #cbd5e1; }
+		.card-actions { display: flex; gap: 6px; }
+		.result { background: #0e1a2b; border: 1px solid #15803d; border-radius: 4px; padding: 10px 12px;
+			margin-top: 10px; font-size: 12px; }
+		.result.error { border-color: #b91c1c; }
+		.result-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+		.metric { background: #1e293b; padding: 4px 10px; border-radius: 4px; font-family: 'SF Mono', monospace;
+			font-size: 11px; }
+		.metric .k { color: #64748b; margin-right: 6px; }
+		.metric .v { color: #86efac; font-weight: 600; }
+		.metric.errs .v { color: #fca5a5; }
+		.empty { padding: 40px; text-align: center; color: #64748b; background: #16213e;
+			border: 1px dashed #334155; border-radius: 6px; }
+		.modal-bg { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.7);
+			display: none; align-items: flex-start; justify-content: center; padding-top: 6vh; z-index: 100; }
+		.modal-bg.show { display: flex; }
+		.modal { background: #16213e; border: 1px solid #334155; border-radius: 8px; padding: 22px;
+			width: min(820px, 92vw); max-height: 86vh; overflow: auto; box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+		.modal h3 { margin: 0 0 12px 0; font-size: 17px; }
+		.row { display: grid; grid-template-columns: 160px 1fr; gap: 8px; margin-bottom: 10px; align-items: start; }
+		.row label { color: #94a3b8; font-size: 12px; padding-top: 6px; }
+		.row input, .row select, .row textarea { width: 100%; box-sizing: border-box; background: #0e1a2b;
+			border: 1px solid #334155; color: #f8fafc; padding: 7px 10px; border-radius: 4px;
+			font-size: 12px; font-family: inherit; }
+		.row textarea { font-family: 'SF Mono', monospace; min-height: 240px; resize: vertical; }
+		.row .hint { font-size: 11px; color: #64748b; margin-top: 3px; }
+		.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+		.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+			background: #15803d; color: #fff; padding: 10px 18px; border-radius: 4px; z-index: 200;
+			box-shadow: 0 4px 12px rgba(0,0,0,.4); font-size: 12px; opacity: 0; transition: opacity .2s; }
+		.toast.show { opacity: 1; }
+		.toast.error { background: #b91c1c; }
+		a.lake-link { color: #93c5fd; text-decoration: none; font-size: 11px; margin-left: 8px; }
+		a.lake-link:hover { text-decoration: underline; }
+	</style>
+</head>
+<body>
+
+<div class="wrap">
+	<h1>Operations</h1>
+	<div class="sub">
+		Typed cached-view operations. Each compiles to a UV Operation graph and runs through the
+		mesh — never touches the lake directly. Results land in named tables read by the dashboards.
+	</div>
+
+	<div class="tabs" id="tabs"></div>
+	<div class="toolbar">
+		<button class="btn" onclick="openCreate()">+ New operation</button>
+		<button class="btn secondary" onclick="loadList()">Refresh</button>
+		<button class="btn run" onclick="runAllInOrder()" title="Run Enriched → Summary → Histogram → Latest in dependency order">▶ Run all (in order)</button>
+	</div>
+
+	<div id="list"></div>
+</div>
+
+<div class="modal-bg" id="modal-bg" onclick="if(event.target===this)closeModal()">
+	<div class="modal">
+		<h3 id="modal-title">New operation</h3>
+		<div class="row"><label>Hash</label><div><input id="f-Hash" placeholder="weather-summary-by-city">
+			<div class="hint">URL-safe identifier. Unique within a Scope.</div></div></div>
+		<div class="row"><label>Name</label><input id="f-Name" placeholder="Weather Summary By City"></div>
+		<div class="row"><label>Description</label><input id="f-Description"></div>
+		<div class="row"><label>OperationType</label><div>
+			<select id="f-OperationType" onchange="onTypeChange()">
+				<option>Extraction</option><option>Aggregation</option>
+				<option>Histogram</option><option>Intersection</option>
+			</select>
+			<div class="hint" id="type-hint"></div>
+		</div></div>
+		<div class="row"><label>Source beacon</label><input id="f-SourceBeaconName" value="lake-databeacon"></div>
+		<div class="row"><label>Source connection</label><input id="f-SourceConnectionHash" value="lake-main"></div>
+		<div class="row"><label>Source entity</label><input id="f-SourceEntity" placeholder="WeatherReadingEnriched"></div>
+		<div class="row"><label>Target beacon</label><input id="f-TargetBeaconName" value="lake-databeacon"></div>
+		<div class="row"><label>Target connection</label><input id="f-TargetConnectionHash" value="lake-main"></div>
+		<div class="row"><label>Target table</label><input id="f-TargetTable" placeholder="WeatherSummaryByCity"></div>
+		<div class="row"><label>OperationConfiguration</label><div>
+			<textarea id="f-OperationConfiguration" spellcheck="false"></textarea>
+			<div class="hint">JSON. Type-specific fields inside (Projection, GroupBy, Aggregates, JoinOn, …).</div></div></div>
+		<div class="modal-actions">
+			<button class="btn secondary" onclick="closeModal()">Cancel</button>
+			<button class="btn" id="save-btn" onclick="saveOperation()">Save</button>
+		</div>
+	</div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="/nav.js"></script>
+<script>
+'use strict';
+
+const TYPE_HINTS = {
+	Extraction: 'Filter + project a record set. Configuration: { Entity, GUIDName, GUIDTemplate, Filter?:{col:val}, Projection:{col:"{~D:Record.X~}"} }',
+	Aggregation: 'Group + aggregate. Configuration: { Entity, GUIDName, GUIDTemplate, GroupBy:[fields], Aggregates:[{Source,Function:"Sum|Count|Mean|Min|Max",As}] }',
+	Histogram: 'Bucket + aggregate. Configuration: { Entity, GUIDName, GUIDTemplate, BucketColumn, BucketKind:"DateMonth|DateDay|DateYear|NumericRange", BucketSize?, BucketAs?, GroupBy?, Aggregates }',
+	Intersection: 'Join Source × Related. Configuration: { Entity, GUIDName, GUIDTemplate, RelatedBeaconName, RelatedConnectionHash, RelatedEntity, JoinOn:{SourceField,RelatedField}, OrderBy?:[{Field,Direction}], Limit?, Projection }'
+};
+
+const SCAFFOLDS = {
+	Extraction: {
+		Entity: 'TargetEntity', GUIDName: 'GUIDTargetEntity',
+		GUIDTemplate: 'TGT_{~D:Record.IDSource~}',
+		Filter: { Active: true },
+		Projection: { ColumnName: '{~D:Record.SourceColumn~}' }
+	},
+	Aggregation: {
+		Entity: 'TargetEntity', GUIDName: 'GUIDTargetEntity',
+		GUIDTemplate: 'AGG_{~D:Record.GroupKey~}',
+		GroupBy: ['GroupCol1', 'GroupCol2'],
+		Aggregates: [
+			{ Source: 'NumericCol', Function: 'Mean', As: 'AvgVal' },
+			{ Source: '*',          Function: 'Count', As: 'RowCount' }
+		]
+	},
+	Histogram: {
+		Entity: 'TargetEntity', GUIDName: 'GUIDTargetEntity',
+		GUIDTemplate: 'HIST_{~D:Record.YearMonth~}',
+		BucketColumn: 'DateColumn', BucketKind: 'DateMonth', BucketAs: 'YearMonth',
+		GroupBy: [],
+		Aggregates: [{ Source: '*', Function: 'Count', As: 'Count' }]
+	},
+	Intersection: {
+		Entity: 'TargetEntity', GUIDName: 'GUIDTargetEntity',
+		GUIDTemplate: 'INT_{~D:Record.IDSource~}_{~D:Record.IDRelated~}',
+		RelatedBeaconName: 'lake-databeacon', RelatedConnectionHash: 'lake-main', RelatedEntity: 'RelatedTable',
+		JoinOn: { SourceField: 'IDX', RelatedField: 'IDX' },
+		OrderBy: [{ Field: 'CreateDate', Direction: 'DESC' }],
+		Limit: 1,
+		Projection: { ColumnName: '{~D:Record.MergedColumn~}' }
+	}
+};
+
+const TYPE_FLOW = {
+	Extraction: 'Pull → Extract → Comprehension → Write',
+	Aggregation: 'Pull → Aggregate → Comprehension → Write',
+	Histogram: 'Pull → Histogram → Comprehension → Write',
+	Intersection: 'PullSource → PullRelated → Intersect → Comprehension → Write'
+};
+
+let _allOps = [];
+let _currentTab = 'All';
+let _editingId = null;
+const TYPES = ['All', 'Extraction', 'Aggregation', 'Histogram', 'Intersection'];
+
+function api(method, path, body)
+{
+	return fetch(path, body !== undefined
+		? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+		: { method }).then(r => r.json().then(j => ({ ok: r.ok, status: r.status, body: j })));
+}
+
+function toast(msg, isError)
+{
+	const t = document.getElementById('toast');
+	t.textContent = msg;
+	t.className = 'toast show' + (isError ? ' error' : '');
+	clearTimeout(t._h);
+	t._h = setTimeout(() => { t.className = 'toast' + (isError ? ' error' : ''); }, 2400);
+}
+
+function renderTabs()
+{
+	const counts = { All: _allOps.length };
+	TYPES.slice(1).forEach(t => counts[t] = _allOps.filter(o => o.OperationType === t).length);
+	document.getElementById('tabs').innerHTML = TYPES.map(t =>
+		`<div class="tab${t === _currentTab ? ' active' : ''}" onclick="switchTab('${t}')">${t}<span class="badge">${counts[t] || 0}</span></div>`
+	).join('');
+}
+
+function switchTab(t) { _currentTab = t; renderTabs(); renderList(); }
+
+function renderList()
+{
+	const ops = (_currentTab === 'All') ? _allOps : _allOps.filter(o => o.OperationType === _currentTab);
+	const list = document.getElementById('list');
+	if (ops.length === 0)
+	{
+		list.innerHTML = '<div class="empty">No operations of this type yet. Click <b>+ New operation</b> to add one.</div>';
+		return;
+	}
+	list.innerHTML = ops.map(o =>
+	{
+		const typeClass = 'type-' + (o.OperationType || '').toLowerCase();
+		return `<div class="card" id="card-${o.IDOperationConfig}">
+			<div class="card-head">
+				<span class="card-name">${escapeHtml(o.Name || o.Hash)}</span>
+				<span class="type-pill ${typeClass}">${o.OperationType}</span>
+				<span class="card-meta">${escapeHtml(o.Hash)}</span>
+			</div>
+			<div class="card-meta">
+				<b>${escapeHtml(o.SourceBeaconName)}</b>/${escapeHtml(o.SourceConnectionHash)}/${escapeHtml(o.SourceEntity)}
+				 → <b>${escapeHtml(o.TargetBeaconName)}</b>/${escapeHtml(o.TargetConnectionHash)}/${escapeHtml(o.TargetTable)}
+				<a class="lake-link" href="javascript:void(0)" onclick="peekTable('${o.TargetBeaconName}','${o.TargetConnectionHash}','${o.TargetTable}','${o.IDOperationConfig}')">peek lake →</a>
+			</div>
+			${o.Description ? `<div class="card-desc">${escapeHtml(o.Description)}</div>` : ''}
+			<div class="card-flow">UV graph: <code>${TYPE_FLOW[o.OperationType] || '?'}</code></div>
+			<div class="card-actions">
+				<button class="btn run" onclick="runOperation(${o.IDOperationConfig})">▶ Run via UV</button>
+				<button class="btn secondary" onclick="editOperation(${o.IDOperationConfig})">Edit</button>
+				<button class="btn danger" onclick="deleteOperation(${o.IDOperationConfig}, '${escapeHtml(o.Name || o.Hash)}')">Delete</button>
+			</div>
+			<div id="result-${o.IDOperationConfig}"></div>
+		</div>`;
+	}).join('');
+}
+
+function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+
+async function loadList()
+{
+	const r = await api('GET', '/mapper/operations?scope=*');
+	_allOps = (r.body && r.body.Operations) || [];
+	renderTabs();
+	renderList();
+}
+
+async function runOperation(id)
+{
+	const card = document.getElementById('card-' + id);
+	const btns = card.querySelectorAll('button'); btns.forEach(b => b.disabled = true);
+	const target = document.getElementById('result-' + id);
+	target.innerHTML = '<div class="result"><i>Running through UV…</i></div>';
+	try
+	{
+		const r = await api('POST', '/mapper/uv/run-operation/' + id, {});
+		btns.forEach(b => b.disabled = false);
+		if (!r.ok || !r.body || r.body.Error)
+		{
+			target.innerHTML = `<div class="result error"><b>Error:</b> ${escapeHtml((r.body && r.body.Error) || 'unknown')}</div>`;
+			return r;
+		}
+		target.innerHTML = renderResult(r.body);
+		return r;
+	}
+	catch (e)
+	{
+		btns.forEach(b => b.disabled = false);
+		target.innerHTML = `<div class="result error"><b>Network error:</b> ${escapeHtml(e.message)}</div>`;
+	}
+}
+
+function renderResult(b)
+{
+	const tos = b.TaskOutputs || {};
+	const cells = Object.keys(tos).map(k =>
+	{
+		const m = tos[k];
+		const parts = [];
+		if ('RecordCount'         in m) parts.push(`<span class="k">in</span><span class="v">${m.RecordCount}</span>`);
+		if ('FilteredOutCount'    in m) parts.push(`<span class="k">filtered</span><span class="v">${m.FilteredOutCount}</span>`);
+		if ('GroupCount'          in m) parts.push(`<span class="k">groups</span><span class="v">${m.GroupCount}</span>`);
+		if ('BucketCount'         in m) parts.push(`<span class="k">buckets</span><span class="v">${m.BucketCount}</span>`);
+		if ('MatchedSourceCount'  in m) parts.push(`<span class="k">matched</span><span class="v">${m.MatchedSourceCount}</span>`);
+		if ('UnmatchedSourceCount' in m && m.UnmatchedSourceCount) parts.push(`<span class="k">unmatched</span><span class="v">${m.UnmatchedSourceCount}</span>`);
+		if ('Written'             in m) parts.push(`<span class="k">written</span><span class="v">${m.Written}</span>`);
+		const hasErrs = ('Errors' in m && m.Errors);
+		if (hasErrs) parts.push(`<span class="k">errors</span><span class="v">${m.Errors}</span>`);
+		return `<span class="metric${hasErrs ? ' errs' : ''}"><b>${k}</b> · ${parts.join(' ')}</span>`;
+	}).join(' ');
+	return `<div class="result">
+		<b>${b.Status}</b> · ${b.ElapsedMs}ms · run ${escapeHtml(b.RunHash || '')}
+		<div class="result-row">${cells}</div>
+	</div>`;
+}
+
+async function runAllInOrder()
+{
+	// Dependency-order chain. Anything not yet present is skipped.
+	const order = ['weather-reading-enriched', 'weather-summary-by-city', 'weather-readings-by-month', 'latest-readings-per-station', 'weatherstation-compact'];
+	const byHash = {}; _allOps.forEach(o => byHash[o.Hash] = o);
+	for (const h of order)
+	{
+		const op = byHash[h];
+		if (!op) continue;
+		toast('Running ' + op.Name + '…');
+		await runOperation(op.IDOperationConfig);
+	}
+	toast('All operations complete', false);
+}
+
+async function peekTable(beacon, conn, table, opId)
+{
+	const target = document.getElementById('result-' + opId);
+	const r = await api('POST', '/mapper/dashboard/panel-data',
+		{ BeaconName: beacon, ConnectionName: conn, Endpoint: table, PageSize: 5, Page: 0 });
+	const rows = (r.body && r.body.Rows) || [];
+	if (rows.length === 0)
+	{
+		target.innerHTML = '<div class="result error">Lake has no rows for this table yet. Run the operation first.</div>';
+		return;
+	}
+	const cols = Object.keys(rows[0]).filter(k => !/^(IDxxx|GUIDxxx|CreateDate|UpdateDate|Deleted|DeleteDate|Creating|Updating|Deleting)/.test(k)).slice(0, 10);
+	const headHtml = cols.map(c => `<th style="text-align:left;padding:4px 8px;border-bottom:1px solid #334155;">${escapeHtml(c)}</th>`).join('');
+	const bodyHtml = rows.map(r => '<tr>' + cols.map(c => `<td style="padding:4px 8px;border-bottom:1px solid #1e293b;font-family:'SF Mono',monospace;font-size:11px;">${escapeHtml(r[c])}</td>`).join('') + '</tr>').join('');
+	target.innerHTML = `<div class="result"><b>Lake peek (5 rows):</b><div style="overflow:auto;margin-top:6px;"><table style="border-collapse:collapse;font-size:12px;">
+		<thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div></div>`;
+}
+
+function openCreate()
+{
+	_editingId = null;
+	document.getElementById('modal-title').textContent = 'New operation';
+	['Hash', 'Name', 'Description', 'SourceEntity', 'TargetTable'].forEach(k => document.getElementById('f-' + k).value = '');
+	document.getElementById('f-OperationType').value = 'Extraction';
+	onTypeChange();
+	document.getElementById('modal-bg').classList.add('show');
+}
+
+function editOperation(id)
+{
+	const op = _allOps.find(o => o.IDOperationConfig === id);
+	api('GET', '/mapper/operation/' + encodeURIComponent(op.Hash) + '?scope=*').then(r =>
+	{
+		const full = r.body || {};
+		_editingId = id;
+		document.getElementById('modal-title').textContent = 'Edit: ' + (full.Name || full.Hash);
+		document.getElementById('f-Hash').value = full.Hash || '';
+		document.getElementById('f-Name').value = full.Name || '';
+		document.getElementById('f-Description').value = full.Description || '';
+		document.getElementById('f-OperationType').value = full.OperationType || 'Extraction';
+		document.getElementById('f-SourceBeaconName').value = full.SourceBeaconName || '';
+		document.getElementById('f-SourceConnectionHash').value = full.SourceConnectionHash || '';
+		document.getElementById('f-SourceEntity').value = full.SourceEntity || '';
+		document.getElementById('f-TargetBeaconName').value = full.TargetBeaconName || '';
+		document.getElementById('f-TargetConnectionHash').value = full.TargetConnectionHash || '';
+		document.getElementById('f-TargetTable').value = full.TargetTable || '';
+		document.getElementById('f-OperationConfiguration').value = JSON.stringify(full.OperationConfiguration || {}, null, '\t');
+		document.getElementById('type-hint').textContent = TYPE_HINTS[full.OperationType] || '';
+		document.getElementById('modal-bg').classList.add('show');
+	});
+}
+
+function onTypeChange()
+{
+	const t = document.getElementById('f-OperationType').value;
+	document.getElementById('type-hint').textContent = TYPE_HINTS[t] || '';
+	if (!_editingId)
+	{
+		document.getElementById('f-OperationConfiguration').value = JSON.stringify(SCAFFOLDS[t] || {}, null, '\t');
+	}
+}
+
+function closeModal() { document.getElementById('modal-bg').classList.remove('show'); }
+
+async function saveOperation()
+{
+	let cfg;
+	try { cfg = JSON.parse(document.getElementById('f-OperationConfiguration').value); }
+	catch (e) { toast('OperationConfiguration is not valid JSON: ' + e.message, true); return; }
+	const body = {
+		Hash: document.getElementById('f-Hash').value.trim(),
+		Name: document.getElementById('f-Name').value.trim(),
+		Description: document.getElementById('f-Description').value.trim(),
+		OperationType: document.getElementById('f-OperationType').value,
+		SourceBeaconName: document.getElementById('f-SourceBeaconName').value.trim(),
+		SourceConnectionHash: document.getElementById('f-SourceConnectionHash').value.trim(),
+		SourceEntity: document.getElementById('f-SourceEntity').value.trim(),
+		TargetBeaconName: document.getElementById('f-TargetBeaconName').value.trim(),
+		TargetConnectionHash: document.getElementById('f-TargetConnectionHash').value.trim(),
+		TargetTable: document.getElementById('f-TargetTable').value.trim(),
+		OperationConfiguration: cfg
+	};
+	if (!body.Hash) { toast('Hash is required', true); return; }
+	if (!body.OperationType) { toast('OperationType is required', true); return; }
+	const r = _editingId
+		? await api('PUT', '/mapper/operation/' + _editingId, body)
+		: await api('POST', '/mapper/operations', body);
+	if (!r.ok || (r.body && r.body.Error))
+	{
+		toast('Save failed: ' + ((r.body && r.body.Error) || r.status), true);
+		return;
+	}
+	toast(_editingId ? 'Updated' : 'Created', false);
+	closeModal();
+	loadList();
+}
+
+async function deleteOperation(id, name)
+{
+	if (!confirm('Delete operation "' + name + '"?\n(soft-delete; the lake table is kept.)')) return;
+	const r = await api('DELETE', '/mapper/operation/' + id);
+	if (!r.ok) { toast('Delete failed', true); return; }
+	toast('Deleted', false);
+	loadList();
+}
+
+loadList();
+</script>
+</body>
+</html>

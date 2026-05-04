@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Retold Cached Views</title>
+	<style>
+		html, body { background: #0e1a2b; margin: 0; padding: 0; min-height: 100vh; color: #f8fafc;
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+		.wrap { max-width: 1480px; margin: 0 auto; padding: 24px; }
+		h1 { font-size: 22px; margin: 0 0 4px 0; font-weight: 600; }
+		.sub { color: #94a3b8; margin-bottom: 18px; }
+		.toolbar { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; align-items: center; }
+		.toolbar select { background: #16213e; color: #f8fafc; border: 1px solid #334155;
+			padding: 7px 12px; border-radius: 4px; font-size: 12px; font-family: inherit; }
+		.btn { padding: 7px 14px; border-radius: 4px; border: 1px solid transparent; background: #1d4ed8;
+			color: #fff; cursor: pointer; font-size: 12px; font-weight: 500; }
+		.btn:hover { background: #1e40af; }
+		.btn.secondary { background: #334155; }
+		.btn.secondary:hover { background: #475569; }
+		.btn.run { background: #15803d; }
+		.btn.run:hover { background: #166534; }
+		.btn:disabled { background: #1e293b; color: #64748b; cursor: not-allowed; }
+		.dash-tabs { display: flex; gap: 4px; margin-bottom: 16px; flex-wrap: wrap; }
+		.dash-tab { padding: 8px 16px; border-radius: 4px; cursor: pointer; background: #16213e; color: #cbd5e1;
+			border: 1px solid #1e293b; font-size: 12px; font-weight: 500; }
+		.dash-tab.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+		.grid { display: grid; gap: 14px; grid-template-columns: repeat(12, 1fr); }
+		.panel { background: #16213e; border: 1px solid #1e293b; border-radius: 8px; padding: 16px;
+			display: flex; flex-direction: column; min-height: 200px; }
+		.panel-w12 { grid-column: span 12; } .panel-w8 { grid-column: span 8; } .panel-w6 { grid-column: span 6; }
+		.panel-w4 { grid-column: span 4; } .panel-w3 { grid-column: span 3; }
+		@media (max-width: 1200px) { .panel-w8, .panel-w6, .panel-w4, .panel-w3 { grid-column: span 12; } }
+		.panel-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; }
+		.panel-title { font-size: 14px; font-weight: 600; color: #f8fafc; }
+		.panel-meta { color: #64748b; font-size: 11px; margin-left: auto; font-family: 'SF Mono', monospace; }
+		.panel-body { flex: 1; min-height: 0; }
+		.kpi { font-size: 32px; font-weight: 700; color: #93c5fd; }
+		.kpi-sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+		.bigtable { width: 100%; border-collapse: collapse; font-size: 12px; }
+		.bigtable th { text-align: left; padding: 6px 10px; border-bottom: 1px solid #334155;
+			background: #0e1a2b; color: #94a3b8; font-weight: 600; font-size: 11px; text-transform: uppercase;
+			letter-spacing: 0.5px; position: sticky; top: 0; }
+		.bigtable td { padding: 6px 10px; border-bottom: 1px solid #1e293b; font-family: 'SF Mono', monospace;
+			font-size: 11px; }
+		.bigtable tr:hover td { background: #0e1a2b; }
+		.scroll-box { overflow: auto; max-height: 360px; }
+		.empty { padding: 30px; text-align: center; color: #64748b; }
+		.muted { color: #64748b; font-size: 11px; }
+		.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+			background: #15803d; color: #fff; padding: 10px 18px; border-radius: 4px; z-index: 200;
+			box-shadow: 0 4px 12px rgba(0,0,0,.4); font-size: 12px; opacity: 0; transition: opacity .2s; }
+		.toast.show { opacity: 1; }
+		.toast.error { background: #b91c1c; }
+		.legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+		.legend-item { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #94a3b8; }
+		.legend-swatch { width: 10px; height: 10px; border-radius: 2px; }
+		.last-run { color: #94a3b8; font-size: 11px; margin-left: 8px; }
+		.last-run.fresh { color: #86efac; }
+		.last-run.stale { color: #fed7aa; }
+	</style>
+</head>
+<body>
+
+<div class="wrap">
+	<h1>Cached Views Dashboard</h1>
+	<div class="sub">
+		Reads-only view of the lake's cached-view tables — every panel is sourced from a typed UV
+		operation result. Click <b>Refresh data</b> to re-trigger the upstream operations through UV.
+	</div>
+
+	<div class="toolbar">
+		<button class="btn run" onclick="refreshAllOperations()" id="refresh-btn">▶ Re-run all operations</button>
+		<button class="btn secondary" onclick="loadAllPanels()">Reload panels</button>
+		<span class="last-run" id="last-run"></span>
+	</div>
+
+	<div class="dash-tabs" id="dash-tabs"></div>
+
+	<div id="dash-body"></div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="/nav.js"></script>
+<script>
+'use strict';
+
+const DASHBOARDS = [
+	{ key: 'overview',  label: 'Overview',                build: buildOverview  },
+	{ key: 'cities',    label: 'Cities (Aggregation)',    build: buildCities    },
+	{ key: 'monthly',   label: 'Monthly trends (Histogram)', build: buildMonthly },
+	{ key: 'stations',  label: 'Stations (Extraction + Latest)', build: buildStations }
+];
+
+let _activeKey = 'overview';
+let _data = {};
+let _lastRunAt = null;
+
+function api(method, path, body)
+{
+	return fetch(path, body !== undefined
+		? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+		: { method }).then(r => r.json().then(j => ({ ok: r.ok, status: r.status, body: j })));
+}
+
+function toast(msg, isError)
+{
+	const t = document.getElementById('toast');
+	t.textContent = msg;
+	t.className = 'toast show' + (isError ? ' error' : '');
+	clearTimeout(t._h);
+	t._h = setTimeout(() => { t.className = 'toast' + (isError ? ' error' : ''); }, 2400);
+}
+
+function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+
+function fmt(v, decimals)
+{
+	if (v == null || v === '') return '—';
+	const n = Number(v);
+	if (isNaN(n)) return String(v);
+	return decimals != null ? n.toFixed(decimals) : String(n);
+}
+
+// Fetch a result table via the existing /mapper/dashboard/panel-data proxy.
+async function loadTable(table, page, pageSize)
+{
+	const r = await api('POST', '/mapper/dashboard/panel-data',
+		{ BeaconName: 'lake-databeacon', ConnectionName: 'lake-main', Endpoint: table,
+		  Page: page || 0, PageSize: pageSize || 1000 });
+	return (r.body && r.body.Rows) || [];
+}
+
+async function loadAllPanels()
+{
+	toast('Loading panels…');
+	const [stations, summary, monthly, latest, enriched] = await Promise.all([
+		loadTable('WeatherStationCompact', 0, 1000),
+		loadTable('WeatherSummaryByCity',  0, 1000),
+		loadTable('WeatherReadingsByMonth', 0, 1000),
+		loadTable('LatestReadingsPerStation', 0, 1000),
+		loadTable('WeatherReadingEnriched', 0, 1000)
+	]);
+	_data = { stations, summary, monthly, latest, enriched };
+	render();
+	toast('Loaded — stations:' + stations.length + ' summary:' + summary.length
+		+ ' monthly:' + monthly.length + ' latest:' + latest.length + ' enriched:' + enriched.length);
+}
+
+async function refreshAllOperations()
+{
+	const btn = document.getElementById('refresh-btn');
+	btn.disabled = true; btn.textContent = '⟳ Running through UV…';
+	const ops = await api('GET', '/mapper/operations?scope=*');
+	const list = (ops.body && ops.body.Operations) || [];
+	const order = ['weather-reading-enriched', 'weather-summary-by-city', 'weather-readings-by-month', 'latest-readings-per-station', 'weatherstation-compact'];
+	const byHash = {}; list.forEach(o => byHash[o.Hash] = o);
+	for (const h of order)
+	{
+		const op = byHash[h];
+		if (!op) continue;
+		btn.textContent = '⟳ ' + op.Name + '…';
+		await api('POST', '/mapper/uv/run-operation/' + op.IDOperationConfig, {});
+	}
+	_lastRunAt = new Date();
+	btn.disabled = false; btn.textContent = '▶ Re-run all operations';
+	updateLastRun();
+	loadAllPanels();
+}
+
+function updateLastRun()
+{
+	const el = document.getElementById('last-run');
+	if (!_lastRunAt) { el.textContent = ''; return; }
+	const ms = Date.now() - _lastRunAt.getTime();
+	el.textContent = 'Operations re-ran ' + Math.floor(ms / 1000) + 's ago';
+	el.className = 'last-run ' + (ms < 60000 ? 'fresh' : 'stale');
+}
+setInterval(updateLastRun, 5000);
+
+function renderTabs()
+{
+	document.getElementById('dash-tabs').innerHTML = DASHBOARDS.map(d =>
+		`<div class="dash-tab${d.key === _activeKey ? ' active' : ''}" onclick="switchDash('${d.key}')">${d.label}</div>`
+	).join('');
+}
+
+function switchDash(k) { _activeKey = k; renderTabs(); render(); }
+
+function render()
+{
+	const dash = DASHBOARDS.find(d => d.key === _activeKey);
+	document.getElementById('dash-body').innerHTML = dash.build();
+}
+
+// =================== SVG CHART HELPERS ===================
+//
+// All charts are inline SVG (no chart.js dep). Shape-wise: each helper
+// takes a data array + size + a key extractor, returns an SVG string.
+// Tone matches the rest of the dashboard (slate panels, blue accents).
+
+function svgBarChart(data, opts)
+{
+	if (!data || data.length === 0) return '<div class="empty">No data</div>';
+	opts = opts || {};
+	const W = opts.width || 700, H = opts.height || 300;
+	const M = { l: 80, r: 20, t: 16, b: 70 };
+	const innerW = W - M.l - M.r, innerH = H - M.t - M.b;
+	const max = Math.max(...data.map(d => Number(d.value) || 0));
+	const min = Math.min(0, ...data.map(d => Number(d.value) || 0));
+	const range = max - min || 1;
+	const bw = innerW / data.length;
+	const palette = opts.palette || ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#a855f7'];
+	const ticks = 5;
+	const tickLines = Array.from({ length: ticks + 1 }, (_, i) =>
+	{
+		const v = min + (range * i / ticks);
+		const y = M.t + innerH - ((v - min) / range) * innerH;
+		return `<line x1="${M.l}" y1="${y}" x2="${M.l + innerW}" y2="${y}" stroke="#1e293b" stroke-dasharray="2,4"/>
+			<text x="${M.l - 6}" y="${y + 3}" text-anchor="end" font-size="10" fill="#64748b">${v.toFixed(opts.decimals != null ? opts.decimals : 0)}</text>`;
+	}).join('');
+	const bars = data.map((d, i) =>
+	{
+		const v = Number(d.value) || 0;
+		const h = Math.abs(v - 0) / range * innerH;
+		const y = v >= 0 ? M.t + innerH - ((v - min) / range) * innerH : M.t + innerH - ((0 - min) / range) * innerH;
+		const x = M.l + i * bw + bw * 0.12;
+		const fill = palette[i % palette.length];
+		return `<g>
+			<rect x="${x}" y="${y}" width="${bw * 0.76}" height="${h}" fill="${fill}" rx="2">
+				<title>${escapeHtml(d.label)}: ${v}</title>
+			</rect>
+			<text x="${x + bw * 0.38}" y="${M.t + innerH + 14}" font-size="10" fill="#94a3b8" text-anchor="end" transform="rotate(-40 ${x + bw * 0.38} ${M.t + innerH + 14})">${escapeHtml(d.label)}</text>
+			<text x="${x + bw * 0.38}" y="${y - 3}" font-size="10" fill="#cbd5e1" text-anchor="middle">${v.toFixed(opts.decimals != null ? opts.decimals : 0)}</text>
+		</g>`;
+	}).join('');
+	return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;display:block">
+		${tickLines}${bars}
+	</svg>`;
+}
+
+function svgLineChart(series, opts)
+{
+	// series: [{ label, color, points: [{x, y}] }]
+	if (!series || series.length === 0 || series[0].points.length === 0)
+		return '<div class="empty">No data</div>';
+	opts = opts || {};
+	const W = opts.width || 900, H = opts.height || 320;
+	const M = { l: 60, r: 20, t: 20, b: 50 };
+	const innerW = W - M.l - M.r, innerH = H - M.t - M.b;
+	const allY = series.flatMap(s => s.points.map(p => p.y));
+	const allX = series[0].points.map(p => p.x);
+	const minY = Math.min(...allY, 0), maxY = Math.max(...allY);
+	const rangeY = (maxY - minY) || 1;
+	const xToPx = i => M.l + (allX.length === 1 ? innerW / 2 : i / (allX.length - 1) * innerW);
+	const yToPx = v => M.t + innerH - (v - minY) / rangeY * innerH;
+	const ticks = 5;
+	const tickLines = Array.from({ length: ticks + 1 }, (_, i) =>
+	{
+		const v = minY + (rangeY * i / ticks);
+		const y = yToPx(v);
+		return `<line x1="${M.l}" y1="${y}" x2="${M.l + innerW}" y2="${y}" stroke="#1e293b" stroke-dasharray="2,4"/>
+			<text x="${M.l - 6}" y="${y + 3}" text-anchor="end" font-size="10" fill="#64748b">${v.toFixed(opts.decimals != null ? opts.decimals : 0)}</text>`;
+	}).join('');
+	const xLabels = allX.map((x, i) =>
+		`<text x="${xToPx(i)}" y="${M.t + innerH + 14}" font-size="10" fill="#94a3b8" text-anchor="middle">${escapeHtml(x)}</text>`
+	).join('');
+	const lines = series.map(s =>
+	{
+		const pts = s.points.map((p, i) => `${xToPx(i)},${yToPx(p.y)}`).join(' ');
+		const dots = s.points.map((p, i) => `<circle cx="${xToPx(i)}" cy="${yToPx(p.y)}" r="3" fill="${s.color}"><title>${escapeHtml(s.label)} ${escapeHtml(p.x)}: ${p.y}</title></circle>`).join('');
+		return `<polyline points="${pts}" stroke="${s.color}" stroke-width="2" fill="none" stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
+	}).join('');
+	const legend = series.map(s =>
+		`<span class="legend-item"><span class="legend-swatch" style="background:${s.color}"></span>${escapeHtml(s.label)}</span>`
+	).join('');
+	return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;display:block">
+		${tickLines}${xLabels}${lines}
+	</svg><div class="legend">${legend}</div>`;
+}
+
+function svgHeatmap(grid, xs, ys, opts)
+{
+	// grid: { x: { y: value } }; xs/ys = ordered axis labels
+	opts = opts || {};
+	const W = opts.width || 1100, H = opts.height || 380;
+	const M = { l: 50, r: 16, t: 16, b: 50 };
+	const innerW = W - M.l - M.r, innerH = H - M.t - M.b;
+	const cellW = innerW / xs.length, cellH = innerH / ys.length;
+	const all = []; xs.forEach(x => ys.forEach(y => { const v = grid[x] && grid[x][y]; if (v != null) all.push(Number(v)); }));
+	if (all.length === 0) return '<div class="empty">No data</div>';
+	const minV = Math.min(...all), maxV = Math.max(...all);
+	const rangeV = (maxV - minV) || 1;
+	const colorAt = (v) =>
+	{
+		// Cool→warm gradient (blue → cyan → green → yellow → orange → red)
+		const t = (v - minV) / rangeV;
+		const stops = [[59,130,246],[34,197,234],[16,185,129],[245,158,11],[239,68,68]];
+		const i = Math.min(stops.length - 2, Math.floor(t * (stops.length - 1)));
+		const f = (t * (stops.length - 1)) - i;
+		const c0 = stops[i], c1 = stops[i + 1];
+		return `rgb(${Math.round(c0[0] + (c1[0] - c0[0]) * f)},${Math.round(c0[1] + (c1[1] - c0[1]) * f)},${Math.round(c0[2] + (c1[2] - c0[2]) * f)})`;
+	};
+	const cells = [];
+	xs.forEach((x, xi) => ys.forEach((y, yi) =>
+	{
+		const v = grid[x] && grid[x][y];
+		if (v == null) return;
+		cells.push(`<rect x="${M.l + xi * cellW}" y="${M.t + yi * cellH}" width="${cellW - 1}" height="${cellH - 1}" fill="${colorAt(Number(v))}" rx="1"><title>${escapeHtml(x)} / ${escapeHtml(y)}: ${v}</title></rect>`);
+	}));
+	const xLabels = xs.map((x, i) =>
+		`<text x="${M.l + i * cellW + cellW/2}" y="${M.t + innerH + 14}" font-size="10" fill="#94a3b8" text-anchor="middle" transform="rotate(-30 ${M.l + i * cellW + cellW/2} ${M.t + innerH + 14})">${escapeHtml(x)}</text>`
+	).join('');
+	const yLabels = ys.map((y, i) =>
+		`<text x="${M.l - 6}" y="${M.t + i * cellH + cellH/2 + 3}" font-size="10" fill="#94a3b8" text-anchor="end">${escapeHtml(y)}</text>`
+	).join('');
+	const legend = `<div class="legend">
+		<span class="legend-item"><span class="legend-swatch" style="background:${colorAt(minV)}"></span>${minV.toFixed(0)}</span>
+		<span class="legend-item"><span class="legend-swatch" style="background:${colorAt((minV + maxV) / 2)}"></span>mid</span>
+		<span class="legend-item"><span class="legend-swatch" style="background:${colorAt(maxV)}"></span>${maxV.toFixed(0)}</span>
+	</div>`;
+	return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;display:block">
+		${cells.join('')}${xLabels}${yLabels}
+	</svg>${legend}`;
+}
+
+// =================== DASHBOARDS ===================
+
+function buildOverview()
+{
+	const stations = _data.stations || [];
+	const summary = _data.summary || [];
+	const monthly = _data.monthly || [];
+	const latest = _data.latest || [];
+	const enriched = _data.enriched || [];
+
+	const activeStations = stations.filter(s => s.Active === true || s.Active === 't' || s.Active === 1).length;
+	const distinctStates = new Set(summary.map(s => s.StateName)).size;
+	const distinctMonths = new Set(monthly.map(m => m.YearMonth)).size;
+	const totalReadings = enriched.length;
+
+	const top10 = summary.slice().sort((a, b) => Number(b.AvgTempF) - Number(a.AvgTempF)).slice(0, 10)
+		.map(s => ({ label: (s.CityName || '').replace(/, [A-Z]+$/, ''), value: Number(s.AvgTempF) }));
+	const cold10 = summary.slice().sort((a, b) => Number(a.AvgTempF) - Number(b.AvgTempF)).slice(0, 10)
+		.map(s => ({ label: (s.CityName || '').replace(/, [A-Z]+$/, ''), value: Number(s.AvgTempF) }));
+
+	return `<div class="grid">
+		<div class="panel panel-w3"><div class="panel-head"><span class="panel-title">Active stations</span></div>
+			<div class="kpi">${activeStations}</div>
+			<div class="kpi-sub">of ${stations.length} total · WeatherStationCompact</div></div>
+		<div class="panel panel-w3"><div class="panel-head"><span class="panel-title">Cities reporting</span></div>
+			<div class="kpi">${summary.length}</div>
+			<div class="kpi-sub">across ${distinctStates} states · WeatherSummaryByCity</div></div>
+		<div class="panel panel-w3"><div class="panel-head"><span class="panel-title">Monthly buckets</span></div>
+			<div class="kpi">${monthly.length}</div>
+			<div class="kpi-sub">${distinctMonths} months × ${distinctStates} states · WeatherReadingsByMonth</div></div>
+		<div class="panel panel-w3"><div class="panel-head"><span class="panel-title">Total readings</span></div>
+			<div class="kpi">${totalReadings}</div>
+			<div class="kpi-sub">enriched view · WeatherReadingEnriched</div></div>
+
+		<div class="panel panel-w6"><div class="panel-head"><span class="panel-title">Hottest 10 cities (annual avg °F)</span><span class="panel-meta">WeatherSummaryByCity</span></div>
+			<div class="panel-body">${svgBarChart(top10, { palette: ['#ef4444','#f97316','#f59e0b','#eab308','#84cc16','#22c55e','#10b981','#06b6d4','#3b82f6','#8b5cf6'] })}</div></div>
+		<div class="panel panel-w6"><div class="panel-head"><span class="panel-title">Coldest 10 cities (annual avg °F)</span><span class="panel-meta">WeatherSummaryByCity</span></div>
+			<div class="panel-body">${svgBarChart(cold10, { palette: ['#1e3a8a','#1d4ed8','#3b82f6','#06b6d4','#22d3ee','#67e8f9','#a5f3fc','#cffafe','#e0f2fe','#f0f9ff'] })}</div></div>
+
+		<div class="panel panel-w12"><div class="panel-head"><span class="panel-title">Latest readings (across all stations)</span><span class="panel-meta">LatestReadingsPerStation</span></div>
+			<div class="panel-body">${buildLatestTable(latest.slice().sort((a,b) => String(b.ReadingDate).localeCompare(String(a.ReadingDate))).slice(0, 25))}</div></div>
+	</div>`;
+}
+
+function buildCities()
+{
+	const summary = (_data.summary || []).slice();
+	if (summary.length === 0) return '<div class="empty">WeatherSummaryByCity is empty. Run the operation.</div>';
+	const sortedAvg = summary.slice().sort((a, b) => Number(b.AvgTempF) - Number(a.AvgTempF));
+	const sortedRange = summary.slice().sort((a, b) => (Number(b.MaxTempF) - Number(b.MinTempF)) - (Number(a.MaxTempF) - Number(a.MinTempF)));
+	const sortedPrecip = summary.slice().sort((a, b) => Number(b.TotalPrecip) - Number(a.TotalPrecip));
+
+	const tempBars = sortedAvg.slice(0, 25).map(s => ({ label: (s.CityName||'').replace(/, [A-Z]+$/,''), value: Number(s.AvgTempF) }));
+	const rangeBars = sortedRange.slice(0, 15).map(s => ({ label: (s.CityName||'').replace(/, [A-Z]+$/,''), value: Number(s.MaxTempF) - Number(s.MinTempF) }));
+	const precipBars = sortedPrecip.slice(0, 15).map(s => ({ label: (s.CityName||'').replace(/, [A-Z]+$/,''), value: Number(s.TotalPrecip) }));
+
+	const rows = sortedAvg.map(s => `<tr>
+		<td>${escapeHtml(s.StateName)}</td>
+		<td><b>${escapeHtml(s.CityName)}</b></td>
+		<td>${fmt(s.AvgTempF, 1)}°F</td>
+		<td>${fmt(s.MaxTempF, 0)}°F</td>
+		<td>${fmt(s.MinTempF, 0)}°F</td>
+		<td>${fmt(s.TotalPrecip, 2)}″</td>
+		<td>${s.ReadingCount}</td>
+	</tr>`).join('');
+
+	return `<div class="grid">
+		<div class="panel panel-w12"><div class="panel-head"><span class="panel-title">Annual avg temperature (°F) — all 25 cities</span><span class="panel-meta">Aggregation · GroupBy(StateName, CityName) · Mean(AvgTemperatureF)</span></div>
+			<div class="panel-body">${svgBarChart(tempBars, { decimals: 1, palette: tempBars.map((_, i) => `hsl(${220 - (i * 220 / tempBars.length)}, 70%, 55%)`) })}</div></div>
+
+		<div class="panel panel-w6"><div class="panel-head"><span class="panel-title">Top 15 cities by annual temperature swing (Max − Min)</span><span class="panel-meta">Max(HighTemperatureF) − Min(LowTemperatureF)</span></div>
+			<div class="panel-body">${svgBarChart(rangeBars, { decimals: 0 })}</div></div>
+
+		<div class="panel panel-w6"><div class="panel-head"><span class="panel-title">Top 15 cities by total annual precipitation</span><span class="panel-meta">Sum(PrecipitationInches) · inches</span></div>
+			<div class="panel-body">${svgBarChart(precipBars, { decimals: 1, palette: ['#0ea5e9','#06b6d4','#22d3ee','#67e8f9','#a5f3fc','#bae6fd','#7dd3fc','#38bdf8','#0284c7','#0369a1','#075985','#0c4a6e','#082f49','#1e3a8a','#312e81'] })}</div></div>
+
+		<div class="panel panel-w12"><div class="panel-head"><span class="panel-title">Full city table</span><span class="panel-meta">${summary.length} rows</span></div>
+			<div class="panel-body scroll-box"><table class="bigtable">
+				<thead><tr><th>State</th><th>City</th><th>Avg °F</th><th>Max</th><th>Min</th><th>Total precip</th><th>N</th></tr></thead>
+				<tbody>${rows}</tbody>
+			</table></div></div>
+	</div>`;
+}
+
+function buildMonthly()
+{
+	const monthly = (_data.monthly || []).slice();
+	if (monthly.length === 0) return '<div class="empty">WeatherReadingsByMonth is empty. Run the operation.</div>';
+
+	const months = Array.from(new Set(monthly.map(m => m.YearMonth))).sort();
+	const states = Array.from(new Set(monthly.map(m => m.StateName))).sort();
+
+	// Build avg-temp line series per state (top 6 by total readings).
+	const stateTotals = {};
+	monthly.forEach(m => { stateTotals[m.StateName] = (stateTotals[m.StateName] || 0) + Number(m.ReadingCount); });
+	const topStates = Object.keys(stateTotals).sort((a, b) => stateTotals[b] - stateTotals[a]).slice(0, 6);
+	const palette = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4'];
+	const tempSeries = topStates.map((st, i) =>
+	{
+		const points = months.map(m =>
+		{
+			const row = monthly.find(r => r.YearMonth === m && r.StateName === st);
+			return { x: m, y: row ? Number(row.AvgTempF) : null };
+		}).filter(p => p.y != null);
+		return { label: st, color: palette[i % palette.length], points };
+	});
+
+	// Heatmap: AvgTempF, x=month, y=state
+	const heatGrid = {};
+	months.forEach(m => heatGrid[m] = {});
+	monthly.forEach(r => { heatGrid[r.YearMonth][r.StateName] = Number(r.AvgTempF); });
+
+	// Total reading count by month, summed across states.
+	const monthlyTotals = months.map(m => ({
+		label: m,
+		value: monthly.filter(r => r.YearMonth === m).reduce((s, r) => s + Number(r.ReadingCount), 0)
+	}));
+
+	// Total precipitation by month.
+	const precipMonthly = months.map(m => ({
+		label: m,
+		value: Math.round(monthly.filter(r => r.YearMonth === m).reduce((s, r) => s + Number(r.TotalPrecip), 0) * 100) / 100
+	}));
+
+	return `<div class="grid">
+		<div class="panel panel-w12"><div class="panel-head"><span class="panel-title">Monthly avg temperature — top 6 states by activity</span><span class="panel-meta">Histogram · BucketKind=DateMonth · Mean(AvgTemperatureF) per (YearMonth, StateName)</span></div>
+			<div class="panel-body">${svgLineChart(tempSeries, { decimals: 0 })}</div></div>
+
+		<div class="panel panel-w6"><div class="panel-head"><span class="panel-title">Total readings per month</span><span class="panel-meta">Sum(Count) over all states</span></div>
+			<div class="panel-body">${svgBarChart(monthlyTotals)}</div></div>
+
+		<div class="panel panel-w6"><div class="panel-head"><span class="panel-title">Total precipitation per month (sum across all states)</span><span class="panel-meta">inches</span></div>
+			<div class="panel-body">${svgBarChart(precipMonthly, { decimals: 1, palette: ['#06b6d4'] })}</div></div>
+
+		<div class="panel panel-w12"><div class="panel-head"><span class="panel-title">Monthly avg temperature heatmap (states × months)</span><span class="panel-meta">all ${states.length} states × ${months.length} months</span></div>
+			<div class="panel-body">${svgHeatmap(heatGrid, months, states, { width: 1200, height: 28 + states.length * 18 })}</div></div>
+	</div>`;
+}
+
+function buildStations()
+{
+	const stations = (_data.stations || []).slice();
+	const latest = (_data.latest || []).slice();
+	const active = stations.filter(s => s.Active === true || s.Active === 't' || s.Active === 1);
+	const inactive = stations.filter(s => !(s.Active === true || s.Active === 't' || s.Active === 1));
+
+	// Group latest readings by station for the per-station card.
+	const byStation = {};
+	latest.forEach(r =>
+	{
+		const k = r.IDWeatherStation;
+		if (!byStation[k]) byStation[k] = { CityName: r.CityName, StateName: r.StateName, StationCode: r.StationCode, rows: [] };
+		byStation[k].rows.push(r);
+	});
+	const stationCards = Object.keys(byStation).sort((a, b) => byStation[a].CityName.localeCompare(byStation[b].CityName)).map(k =>
+	{
+		const s = byStation[k];
+		s.rows.sort((a, b) => String(b.ReadingDate).localeCompare(String(a.ReadingDate)));
+		const items = s.rows.map(r => `<tr>
+			<td>${escapeHtml(String(r.ReadingDate || '').slice(0, 10))}</td>
+			<td>${fmt(r.AvgTempF, 0)}°</td>
+			<td>${fmt(r.HighTempF, 0)}°</td>
+			<td>${fmt(r.LowTempF, 0)}°</td>
+		</tr>`).join('');
+		return `<div style="background:#0e1a2b;border:1px solid #334155;border-radius:6px;padding:10px 12px;">
+			<div style="font-weight:600;color:#f8fafc;margin-bottom:2px;">${escapeHtml(s.CityName)}</div>
+			<div class="muted" style="margin-bottom:6px;">${escapeHtml(s.StateName)} · ${escapeHtml(s.StationCode)}</div>
+			<table class="bigtable" style="font-size:11px;"><thead><tr><th>Date</th><th>Avg</th><th>High</th><th>Low</th></tr></thead><tbody>${items}</tbody></table>
+		</div>`;
+	}).join('');
+
+	const compactRows = stations.slice().sort((a, b) => (a.StateName || '').localeCompare(b.StateName || '') || (a.CityName || '').localeCompare(b.CityName || '')).map(s => `<tr>
+		<td>${escapeHtml(s.StationCode)}</td>
+		<td>${escapeHtml(s.CityName)}</td>
+		<td>${escapeHtml(s.StateName)}</td>
+		<td>${(s.Active === true || s.Active === 't' || s.Active === 1) ? '<span style="color:#86efac;">●</span> Active' : '<span style="color:#94a3b8;">○</span> Inactive'}</td>
+	</tr>`).join('');
+
+	return `<div class="grid">
+		<div class="panel panel-w4"><div class="panel-head"><span class="panel-title">Active</span></div>
+			<div class="kpi" style="color:#86efac;">${active.length}</div>
+			<div class="kpi-sub">currently reporting</div></div>
+		<div class="panel panel-w4"><div class="panel-head"><span class="panel-title">Inactive</span></div>
+			<div class="kpi" style="color:#fca5a5;">${inactive.length}</div>
+			<div class="kpi-sub">filtered out by Extraction</div></div>
+		<div class="panel panel-w4"><div class="panel-head"><span class="panel-title">Stations with recent readings</span></div>
+			<div class="kpi" style="color:#93c5fd;">${Object.keys(byStation).length}</div>
+			<div class="kpi-sub">tracked in LatestReadingsPerStation</div></div>
+
+		<div class="panel panel-w8"><div class="panel-head"><span class="panel-title">Latest 3 readings per station</span><span class="panel-meta">Intersection · Limit=3 · OrderBy ReadingDate DESC</span></div>
+			<div class="panel-body" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">${stationCards || '<div class="empty">No data</div>'}</div></div>
+
+		<div class="panel panel-w4"><div class="panel-head"><span class="panel-title">All stations (compact)</span><span class="panel-meta">Extraction · WeatherStationCompact</span></div>
+			<div class="panel-body scroll-box"><table class="bigtable">
+				<thead><tr><th>Code</th><th>City</th><th>State</th><th>Status</th></tr></thead>
+				<tbody>${compactRows}</tbody>
+			</table></div></div>
+	</div>`;
+}
+
+function buildLatestTable(rows)
+{
+	if (!rows || rows.length === 0) return '<div class="empty">No data</div>';
+	const tr = rows.map(r => `<tr>
+		<td>${escapeHtml(String(r.ReadingDate || '').slice(0, 10))}</td>
+		<td>${escapeHtml(r.CityName || '')}</td>
+		<td>${escapeHtml(r.StateName || '')}</td>
+		<td>${fmt(r.AvgTempF, 0)}°F</td>
+		<td>${fmt(r.HighTempF, 0)}°F</td>
+		<td>${fmt(r.LowTempF, 0)}°F</td>
+	</tr>`).join('');
+	return `<div class="scroll-box"><table class="bigtable">
+		<thead><tr><th>Date</th><th>City</th><th>State</th><th>Avg</th><th>High</th><th>Low</th></tr></thead>
+		<tbody>${tr}</tbody>
+	</table></div>`;
+}
+
+renderTabs();
+loadAllPanels();
+</script>
+</body>
+</html>

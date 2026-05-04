@@ -13,16 +13,20 @@
 
 	const TABS =
 	[
-		{ key: 'visual',     label: 'Visual mapper', href: '/'                },
-		{ key: 'mappings',   label: 'Mappings',      href: '/mappings.html'   },
-		{ key: 'dashboards', label: 'Dashboards',    href: '/dashboards.html' }
+		{ key: 'visual',       label: 'Visual mapper',     href: '/'                  },
+		{ key: 'mappings',     label: 'Mappings',          href: '/mappings.html'     },
+		{ key: 'operations',   label: 'Operations',        href: '/operations.html'   },
+		{ key: 'cached-views', label: 'Cached views',      href: '/cached-views.html' },
+		{ key: 'dashboards',   label: 'Dashboards (Pict)', href: '/dashboards.html'   }
 	];
 
 	function detectActive()
 	{
 		const path = (typeof location !== 'undefined' && location.pathname) ? location.pathname : '';
-		if (/mappings\.html$/.test(path))   return 'mappings';
-		if (/dashboards\.html$/.test(path)) return 'dashboards';
+		if (/operations\.html$/.test(path))    return 'operations';
+		if (/cached-views\.html$/.test(path))  return 'cached-views';
+		if (/mappings\.html$/.test(path))      return 'mappings';
+		if (/dashboards\.html$/.test(path))    return 'dashboards';
 		return 'visual';
 	}
 
