@@ -87,9 +87,9 @@
       }
       module.exports = DashboardShellApplication;
     }, {
-      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 8,
-      "pict-application": 22,
-      "pict-section-modal": 30
+      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 10,
+      "pict-application": 31,
+      "pict-section-modal": 39
     }],
     2: [function (require, module, exports) {
       /**
@@ -169,15 +169,196 @@
       module.exports = DataMapperApplication;
       module.exports.default_configuration = {};
     }, {
-      "./providers/Pict-Provider-MapperAPI.js": 5,
-      "./views/PictView-Mapper-BeaconBrowser.js": 14,
-      "./views/PictView-Mapper-FieldMapper.js": 15,
-      "./views/PictView-Mapper-JSONEditor.js": 16,
-      "./views/PictView-Mapper-Layout.js": 17,
-      "./views/PictView-Mapper-MappingList.js": 18,
-      "pict-application": 22
+      "./providers/Pict-Provider-MapperAPI.js": 7,
+      "./views/PictView-Mapper-BeaconBrowser.js": 20,
+      "./views/PictView-Mapper-FieldMapper.js": 21,
+      "./views/PictView-Mapper-JSONEditor.js": 22,
+      "./views/PictView-Mapper-Layout.js": 23,
+      "./views/PictView-Mapper-MappingList.js": 24,
+      "pict-application": 31
     }],
     3: [function (require, module, exports) {
+      /**
+       * Retold DataMapper — Cohesive MapperShell Application
+       *
+       * Single-page app that mounts all four mapper sections behind a top-nav:
+       *   Connections (placeholder for Phase 4) | Mappings | Operations | Dashboards
+       *
+       * State (pict.AppData.MapperShell):
+       *   ActiveTab    — 'connections' | 'mappings' | 'operations' | 'dashboards'
+       *   Scope        — string; pushed into all four section providers
+       *   Tabs         — TopNav's pre-decorated tab records (built in onBeforeRender)
+       *
+       * The shell's main viewport renders the layout (top-nav slot + four
+       * destination divs); each section is registered with a destination
+       * address pointing at its own div. CSS on the shell root toggles which
+       * section pane is visible based on `data-active-tab`. Sections stay
+       * mounted between tab switches — no rebuild churn.
+       */
+      'use strict';
+
+      const libPictApplication = require('pict-application');
+      const libSectionMapping = require('./vendor/pict-section-mapping/source/Pict-Section-Mapping.js');
+      const libSectionOperation = require('./vendor/pict-section-operation/source/Pict-Section-Operation.js');
+      const libSectionDashboard = require('./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js');
+      const libSectionModal = require('pict-section-modal');
+      const libLayoutView = require('./views/PictView-MapperShell-Layout.js');
+      const libTopNavView = require('./views/PictView-MapperShell-TopNav.js');
+      const libConnectionsView = require('./views/PictView-MapperShell-Connections.js');
+      const SCOPE_STORAGE_KEY = 'retold.dataMapper.activeScope';
+      const _DefaultConfiguration = {
+        Name: 'MapperShell',
+        MainViewportViewIdentifier: 'MapperShell-Layout',
+        MainViewportRenderableHash: 'MapperShell-Layout-Renderable',
+        MainViewportDestinationAddress: '#MapperShell',
+        AutoSolveAfterInitialize: true,
+        AutoRenderMainViewportViewAfterInitialize: true
+      };
+      class MapperShellApplication extends libPictApplication {
+        constructor(pFable, pOptions, pServiceHash) {
+          let tmpOptions = Object.assign({}, _DefaultConfiguration, pOptions || {});
+          super(pFable, tmpOptions, pServiceHash);
+          this.serviceType = 'MapperShellApplication';
+          this._seedAppData();
+
+          // Modal first — sections look it up under 'Pict-Section-Modal' or 'Modal'.
+          this.pict.addView('Modal', {}, libSectionModal);
+
+          // Layout, top-nav, and connections placeholder.
+          this.pict.addView('MapperShell-Layout', libLayoutView.default_configuration, libLayoutView);
+          this.pict.addView('MapperShell-TopNav', libTopNavView.default_configuration, libTopNavView);
+          this.pict.addView('MapperShell-Connections', libConnectionsView.default_configuration, libConnectionsView);
+
+          // Three sections — each pointed at its own destination div within the layout.
+          // Same shared scope (read from localStorage) so the picker in the top-nav
+          // hits all of them at once.
+          this.pict.addView('Pict-Section-Mapping', Object.assign({}, libSectionMapping.default_configuration, {
+            DefaultDestinationAddress: '#MapperShell-Mappings',
+            ContentDestinationAddress: '#MapperShell-Mappings',
+            APIBaseUrl: '/mapper',
+            Mode: 'manage',
+            ShowToolbar: false,
+            // shell owns the scope picker
+            AutoRender: false
+          }), libSectionMapping);
+          this.pict.addView('Pict-Section-Operation', Object.assign({}, libSectionOperation.default_configuration, {
+            DefaultDestinationAddress: '#MapperShell-Operations',
+            ContentDestinationAddress: '#MapperShell-Operations',
+            APIBaseUrl: '/mapper',
+            Mode: 'manage',
+            ShowToolbar: false,
+            AutoRender: false
+          }), libSectionOperation);
+          this.pict.addView('Pict-Section-Dashboard', Object.assign({}, libSectionDashboard.default_configuration, {
+            ContentDestinationAddress: '#MapperShell-Dashboards',
+            APIBaseUrl: '/mapper',
+            Mode: 'manage',
+            ShowToolbar: false,
+            AutoRender: false
+          }), libSectionDashboard);
+        }
+        _seedAppData() {
+          if (!this.pict.AppData) this.pict.AppData = {};
+          this.pict.AppData.MapperShell = {
+            ActiveTab: 'mappings',
+            // start on Mappings (most-used surface)
+            Scope: this._readScope(),
+            Tabs: []
+          };
+        }
+        _readScope() {
+          try {
+            if (typeof localStorage !== 'undefined') {
+              let tmpStored = localStorage.getItem(SCOPE_STORAGE_KEY);
+              if (tmpStored !== null) return tmpStored;
+            }
+          } catch (pErr) {/* opaque origin — fall through */}
+          return '';
+        }
+        _writeScope(pScope) {
+          try {
+            if (typeof localStorage !== 'undefined') {
+              if (pScope) localStorage.setItem(SCOPE_STORAGE_KEY, pScope);else localStorage.removeItem(SCOPE_STORAGE_KEY);
+            }
+          } catch (pErr) {/* opaque origin — keep in-memory only */}
+        }
+
+        // ── Lifecycle ────────────────────────────────────────────────────
+
+        // Called by the layout view's onAfterRender (the only point at which
+        // the destination divs are guaranteed to be in the DOM). The
+        // application's own onAfterInitializeAsync fires *before* the
+        // main-viewport auto-render lands, so wiring children here instead.
+        renderChildren() {
+          if (this.pict.views['MapperShell-TopNav']) this.pict.views['MapperShell-TopNav'].render();
+          this._renderActiveSection();
+        }
+
+        // ── Public API (called from inline handlers in TopNav) ───────────
+
+        selectTab(pKey) {
+          this.pict.AppData.MapperShell.ActiveTab = pKey;
+          // Re-render the layout so its `data-active-tab` attribute updates
+          // (CSS uses it to swap which pane is visible). Then re-render
+          // the top-nav so the active tab styling flips. Finally trigger
+          // the active section's render in case it hasn't loaded yet.
+          if (this.pict.views['MapperShell-Layout']) this.pict.views['MapperShell-Layout'].render();
+          if (this.pict.views['MapperShell-TopNav']) this.pict.views['MapperShell-TopNav'].render();
+          this._renderActiveSection();
+        }
+        onScopeInput(pValue) {
+          let tmpValue = pValue == null ? '' : String(pValue).trim();
+          this.pict.AppData.MapperShell.Scope = tmpValue;
+          this._writeScope(tmpValue);
+
+          // Push scope into each section's API provider, then re-render
+          // whichever sections have already loaded so they reflect the new
+          // scope's data.
+          this._pushScopeIntoSections(tmpValue);
+          this._renderActiveSection();
+        }
+        _pushScopeIntoSections(pScope) {
+          let tmpKeys = ['Pict-Section-Mapping', 'Pict-Section-Operation', 'Pict-Section-Dashboard'];
+          for (let i = 0; i < tmpKeys.length; i++) {
+            let tmpView = this.pict.views[tmpKeys[i]];
+            if (tmpView && tmpView._API && typeof tmpView._API.setScope === 'function') {
+              tmpView._API.setScope(pScope);
+            }
+          }
+        }
+        _renderActiveSection() {
+          let tmpActive = this.pict.AppData.MapperShell.ActiveTab;
+          let tmpView = null;
+          switch (tmpActive) {
+            case 'connections':
+              tmpView = this.pict.views['MapperShell-Connections'];
+              break;
+            case 'mappings':
+              tmpView = this.pict.views['Pict-Section-Mapping'];
+              break;
+            case 'operations':
+              tmpView = this.pict.views['Pict-Section-Operation'];
+              break;
+            case 'dashboards':
+              tmpView = this.pict.views['Pict-Section-Dashboard'];
+              break;
+          }
+          if (tmpView && typeof tmpView.render === 'function') tmpView.render();
+        }
+      }
+      module.exports = MapperShellApplication;
+      module.exports.default_configuration = _DefaultConfiguration;
+    }, {
+      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 10,
+      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 14,
+      "./vendor/pict-section-operation/source/Pict-Section-Operation.js": 18,
+      "./views/PictView-MapperShell-Connections.js": 25,
+      "./views/PictView-MapperShell-Layout.js": 26,
+      "./views/PictView-MapperShell-TopNav.js": 27,
+      "pict-application": 31,
+      "pict-section-modal": 39
+    }],
+    4: [function (require, module, exports) {
       /**
        * Retold DataMapper — Mapping Shell Pict Application
        *
@@ -211,11 +392,54 @@
       }
       module.exports = MappingShellApplication;
     }, {
-      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 12,
-      "pict-application": 22,
-      "pict-section-modal": 30
+      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 14,
+      "pict-application": 31,
+      "pict-section-modal": 39
     }],
-    4: [function (require, module, exports) {
+    5: [function (require, module, exports) {
+      /**
+       * Retold DataMapper — Operation Shell Pict Application
+       *
+       * One-view application that mounts pict-section-operation in `manage`
+       * mode. Used by operations.html. Replaces the prior 434-line vanilla-JS
+       * hand-rolled editor that lived in operations.html itself.
+       *
+       * The section handles list / edit / run / delete + tabbed type filter;
+       * this shell only registers it against the page's destination div and
+       * makes pict-section-modal available so the section's confirms / toasts
+       * / show calls have a real implementation rather than the no-op fallback.
+       */
+      const libPictApplication = require('pict-application');
+      const libSectionOperation = require('./vendor/pict-section-operation/source/Pict-Section-Operation.js');
+      const libSectionModal = require('pict-section-modal');
+      class OperationShellApplication extends libPictApplication {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+          this.serviceType = 'OperationShellApplication';
+          this.pict.addView('Modal', {}, libSectionModal);
+          this.pict.addView('Pict-Section-Operation', Object.assign({}, libSectionOperation.default_configuration, {
+            ContentDestinationAddress: '#operation-section',
+            DefaultDestinationAddress: '#operation-section',
+            APIBaseUrl: '/mapper',
+            Mode: 'manage',
+            ShowToolbar: true,
+            AutoRender: true
+          }), libSectionOperation);
+        }
+        onAfterInitializeAsync(fCallback) {
+          if (this.pict.views && this.pict.views['Pict-Section-Operation']) {
+            this.pict.views['Pict-Section-Operation'].render();
+          }
+          return super.onAfterInitializeAsync(fCallback);
+        }
+      }
+      module.exports = OperationShellApplication;
+    }, {
+      "./vendor/pict-section-operation/source/Pict-Section-Operation.js": 18,
+      "pict-application": 31,
+      "pict-section-modal": 39
+    }],
+    6: [function (require, module, exports) {
       /**
        * Retold DataMapper — Browser Bundle Entry
        *
@@ -232,34 +456,43 @@
       let libViewJSONEditor = require('./views/PictView-Mapper-JSONEditor.js');
 
       // Embeddable Pict-section views — bundled here so standalone shell
-      // pages (dashboards.html, mappings.html) can mount them, and so any
-      // "ENHANCE another product" host that consumes this bundle gets the
-      // sections via the global names below.
+      // pages (dashboards.html, mappings.html, operations.html) can mount
+      // them, and so any "ENHANCE another product" host that consumes this
+      // bundle gets the sections via the global names below.
       let libSectionDashboard = require('./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js');
       let libSectionMapping = require('./vendor/pict-section-mapping/source/Pict-Section-Mapping.js');
+      let libSectionOperation = require('./vendor/pict-section-operation/source/Pict-Section-Operation.js');
       let libDashboardShellApp = require('./Pict-Application-DashboardShell.js');
       let libMappingShellApp = require('./Pict-Application-MappingShell.js');
+      let libOperationShellApp = require('./Pict-Application-OperationShell.js');
+      let libMapperShellApp = require('./Pict-Application-MapperShell.js');
       window.DataMapperApplication = libDataMapperApplication;
       window.PictSectionDashboard = libSectionDashboard;
       window.PictSectionMapping = libSectionMapping;
+      window.PictSectionOperation = libSectionOperation;
       window.DashboardShellApplication = libDashboardShellApp;
       window.MappingShellApplication = libMappingShellApp;
+      window.OperationShellApplication = libOperationShellApp;
+      window.MapperShellApplication = libMapperShellApp;
     }, {
       "./Pict-Application-DashboardShell.js": 1,
       "./Pict-Application-DataMapper.js": 2,
-      "./Pict-Application-MappingShell.js": 3,
-      "./providers/Pict-Provider-MapperAPI.js": 5,
-      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 8,
-      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 12,
-      "./views/PictView-Mapper-BeaconBrowser.js": 14,
-      "./views/PictView-Mapper-FieldMapper.js": 15,
-      "./views/PictView-Mapper-JSONEditor.js": 16,
-      "./views/PictView-Mapper-Layout.js": 17,
-      "./views/PictView-Mapper-MappingList.js": 18,
-      "pict-application": 22,
-      "pict-view": 32
+      "./Pict-Application-MapperShell.js": 3,
+      "./Pict-Application-MappingShell.js": 4,
+      "./Pict-Application-OperationShell.js": 5,
+      "./providers/Pict-Provider-MapperAPI.js": 7,
+      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 10,
+      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 14,
+      "./vendor/pict-section-operation/source/Pict-Section-Operation.js": 18,
+      "./views/PictView-Mapper-BeaconBrowser.js": 20,
+      "./views/PictView-Mapper-FieldMapper.js": 21,
+      "./views/PictView-Mapper-JSONEditor.js": 22,
+      "./views/PictView-Mapper-Layout.js": 23,
+      "./views/PictView-Mapper-MappingList.js": 24,
+      "pict-application": 31,
+      "pict-view": 41
     }],
-    5: [function (require, module, exports) {
+    7: [function (require, module, exports) {
       /**
        * Retold DataMapper — API Provider
        *
@@ -767,9 +1000,9 @@
         AutoRender: false
       };
     }, {
-      "pict-view": 32
+      "pict-view": 41
     }],
-    6: [function (require, module, exports) {
+    8: [function (require, module, exports) {
       /**
        * Pict-Section-Dashboard CSS
        *
@@ -950,7 +1183,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 .psd-mode-render-only .psd-list-row .psd-row-actions { display: none; }
 `;
     }, {}],
-    7: [function (require, module, exports) {
+    9: [function (require, module, exports) {
       /**
        * Pict-Section-Dashboard default configuration.
        *
@@ -978,12 +1211,14 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
         ShowToolbar: true,
         Scope: null,
         // null = read from localStorage; '' = global; '<value>' = pinned
+        WriteToken: null,
+        // bearer token for POST/PUT/DELETE when DATA_MAPPER_WRITE_TOKEN is set on the server
         ListPageSize: 25,
         // default panel paging when not specified by Layout
         ListCompactRows: 10 // default cap for list-compact panels
       };
     }, {}],
-    8: [function (require, module, exports) {
+    10: [function (require, module, exports) {
       /**
        * Pict-Section-Dashboard
        *
@@ -1019,6 +1254,16 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
        * via direct DOM manipulation (not Pict templates) because dashboard
        * layouts are arbitrary nested JSON and don't fit the template-engine
        * iteration model. State + lifecycle are still Pict-managed.
+       *
+       * **Documented exception to modules/pict/CLAUDE.md template conventions.**
+       * The recursive layout dispatch (rows containing columns containing rows
+       * containing panels — arbitrary depth) doesn't compose cleanly with the
+       * `{~TS:RowTemplate:Address~}` iteration model, which has no recursive
+       * "render this same template against my children" idiom. CLAUDE.md
+       * explicitly allows legitimate exceptions; this is one. The toolbar /
+       * list / editor sub-views could be template-driven (parallel to
+       * pict-section-operation and pict-section-mapping); a follow-up refactor
+       * may carve those out while keeping the panel-layout dispatcher imperative.
        */
       'use strict';
 
@@ -1032,7 +1277,8 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
           super(pFable, tmpOptions, pServiceHash);
           this._API = new libAPIProvider({
             APIBaseUrl: this.options.APIBaseUrl,
-            Scope: this.options.Scope
+            Scope: this.options.Scope,
+            WriteToken: this.options.WriteToken
           });
 
           // Internal state (not exposed via AppData; this section is
@@ -1606,12 +1852,12 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports.default_configuration = PictSectionDashboard.default_configuration;
       module.exports.APIProvider = libAPIProvider;
     }, {
-      "./Pict-Section-Dashboard-CSS.js": 6,
-      "./Pict-Section-Dashboard-DefaultConfiguration.js": 7,
-      "./providers/PictProvider-Dashboard-API.js": 9,
-      "pict-view": 32
+      "./Pict-Section-Dashboard-CSS.js": 8,
+      "./Pict-Section-Dashboard-DefaultConfiguration.js": 9,
+      "./providers/PictProvider-Dashboard-API.js": 11,
+      "pict-view": 41
     }],
-    9: [function (require, module, exports) {
+    11: [function (require, module, exports) {
       /**
        * Pict-Section-Dashboard API Provider
        *
@@ -1622,6 +1868,11 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
        * The host application doesn't have to know how the data-mapper REST is
        * shaped — it just calls listDashboards / loadDashboard / saveDashboard /
        * deleteDashboard / fetchPanelData and gets a Promise back.
+       *
+       * Bearer-token write gate: when WriteToken is set, POST/PUT/DELETE carry
+       * `Authorization: Bearer <token>` to satisfy the data-mapper's
+       * DATA_MAPPER_WRITE_TOKEN env-driven gate (Phase 2b hardening).
+       * GET stays open.
        */
       'use strict';
 
@@ -1631,26 +1882,38 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
           let tmpOptions = pOptions || {};
           this._apiBaseUrl = tmpOptions.APIBaseUrl || '/mapper';
           this._scopeOverride = typeof tmpOptions.Scope === 'string' ? tmpOptions.Scope : null;
+          this._writeToken = typeof tmpOptions.WriteToken === 'string' && tmpOptions.WriteToken.length > 0 ? tmpOptions.WriteToken : null;
         }
 
         /**
          * Resolve the active scope. Order: explicit per-call scope →
          * provider option → localStorage → '' (global).
+         *
+         * localStorage access is wrapped in try/catch because some sandbox
+         * environments (jsdom with opaque origin, cross-origin iframes,
+         * private-mode browsers with quotas) throw on read.
          */
         getScope(pCallScope) {
           if (typeof pCallScope === 'string') return pCallScope;
           if (typeof this._scopeOverride === 'string') return this._scopeOverride;
-          if (typeof localStorage !== 'undefined') {
-            let tmpStored = localStorage.getItem(SCOPE_STORAGE_KEY);
-            if (tmpStored !== null) return tmpStored;
-          }
+          try {
+            if (typeof localStorage !== 'undefined') {
+              let tmpStored = localStorage.getItem(SCOPE_STORAGE_KEY);
+              if (tmpStored !== null) return tmpStored;
+            }
+          } catch (pErr) {/* opaque origin or disabled storage — fall through */}
           return '';
         }
         setScope(pScope) {
-          if (typeof localStorage !== 'undefined') {
-            if (pScope) localStorage.setItem(SCOPE_STORAGE_KEY, pScope);else localStorage.removeItem(SCOPE_STORAGE_KEY);
-          }
+          try {
+            if (typeof localStorage !== 'undefined') {
+              if (pScope) localStorage.setItem(SCOPE_STORAGE_KEY, pScope);else localStorage.removeItem(SCOPE_STORAGE_KEY);
+            }
+          } catch (pErr) {/* opaque origin or disabled storage — keep in-memory only */}
           this._scopeOverride = typeof pScope === 'string' ? pScope : null;
+        }
+        setWriteToken(pToken) {
+          this._writeToken = typeof pToken === 'string' && pToken.length > 0 ? pToken : null;
         }
 
         /**
@@ -1661,9 +1924,13 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
             method: pMethod,
             headers: {}
           };
+          let tmpIsWrite = pMethod !== 'GET' && pMethod !== 'HEAD';
           if (pBody !== undefined && pBody !== null) {
             tmpOpts.headers['Content-Type'] = 'application/json';
             tmpOpts.body = JSON.stringify(pBody);
+          }
+          if (tmpIsWrite && this._writeToken) {
+            tmpOpts.headers['Authorization'] = 'Bearer ' + this._writeToken;
           }
           return fetch(this._apiBaseUrl + pPath, tmpOpts).then(pRes => {
             if (!pRes.ok) {
@@ -1717,7 +1984,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = DashboardAPIProvider;
       module.exports.SCOPE_STORAGE_KEY = SCOPE_STORAGE_KEY;
     }, {}],
-    10: [function (require, module, exports) {
+    12: [function (require, module, exports) {
       /**
        * Pict-Section-Mapping CSS
        *
@@ -1803,6 +2070,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 .psm-content { padding: 16px; max-width: 1400px; margin: 0 auto; }
 
 /* List view */
+.psm-list-wrap { display: flex; flex-direction: column; gap: 12px; }
 .psm-list { display: flex; flex-direction: column; gap: 8px; }
 .psm-list-row
 {
@@ -1900,72 +2168,260 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 .psm-run-result .psm-run-stat .psm-stat-value { font-size: 16px; color: var(--psm-fg); font-family: monospace; font-weight: 600; }
 .psm-run-result.psm-run-success { border-color: var(--psm-success); }
 .psm-run-result.psm-run-error   { border-color: var(--psm-danger); }
-
-.psm-discover-bar
+.psm-run-result.psm-run-running { border-color: var(--psm-warning); }
+.psm-run-result .psm-run-error-message
 {
-	display: flex; align-items: center;
-	margin-bottom: 6px;
+	color: var(--psm-danger-fg);
+	font-family: monospace;
+	font-size: 12px;
+	white-space: pre-wrap;
 }
-.psm-btn-secondary
-{
-	background: var(--psm-bg-elev); color: var(--psm-fg);
-	border: 1px solid var(--psm-border);
-}
-.psm-btn-secondary:hover { filter: brightness(1.15); }
-.psm-chip-bar
-{
-	display: flex; flex-wrap: wrap; gap: 4px;
-	margin-bottom: 6px; padding: 6px;
-	background: var(--psm-bg-elev); border: 1px solid var(--psm-border);
-	border-radius: 4px;
-	max-height: 120px; overflow-y: auto;
-}
-.psm-chip
-{
-	display: inline-block; padding: 3px 8px;
-	background: var(--psm-bg); color: var(--psm-fg);
-	border: 1px solid var(--psm-border); border-radius: 12px;
-	font-size: 11px; font-family: monospace;
-	text-decoration: none; cursor: pointer;
-	user-select: none;
-}
-.psm-chip:hover { background: var(--psm-accent); color: #fff; border-color: var(--psm-accent); }
 `;
     }, {}],
-    11: [function (require, module, exports) {
+    13: [function (require, module, exports) {
       /**
        * Pict-Section-Mapping default configuration.
+       *
+       * Template-driven view per modules/pict/CLAUDE.md conventions.
        */
       'use strict';
 
+      const SHELL_TEMPLATE = /*html*/`
+<div class="psm-root psm-mode-{~Data:AppData.Mapping.Mode~}">
+	{~TS:Pict-Section-Mapping-Toolbar:AppData.Mapping.ToolbarSlot~}
+	<div class="psm-content">
+		{~TS:Pict-Section-Mapping-List:AppData.Mapping.ListSlot~}
+		{~TS:Pict-Section-Mapping-Editor:AppData.Mapping.EditSlot~}
+	</div>
+</div>`;
+      const TOOLBAR_TEMPLATE = /*html*/`
+<div class="psm-toolbar">
+	<h2>Mappings</h2>
+	{~TS:Pict-Section-Mapping-Toolbar-BackLink:AppData.Mapping.BackLinkSlot~}
+	<span class="psm-toolbar-spacer"></span>
+	<label>scope
+		<input type="text" class="psm-scope-input" spellcheck="false" placeholder="(global)"
+			value="{~Data:AppData.Mapping.Scope~}"
+			oninput="_Pict.views['Pict-Section-Mapping'].onScopeInput(this.value)" />
+		<span class="psm-scope-hint">empty = global • * = all</span>
+	</label>
+	{~TS:Pict-Section-Mapping-Toolbar-NewButton:AppData.Mapping.NewButtonSlot~}
+</div>`;
+      const TOOLBAR_BACKLINK_TEMPLATE = /*html*/`
+<a class="psm-btn" href="javascript:void(0)"
+	onclick="_Pict.views['Pict-Section-Mapping'].openList()">← All mappings</a>`;
+      const TOOLBAR_NEWBUTTON_TEMPLATE = /*html*/`
+<a class="psm-btn psm-btn-primary" href="javascript:void(0)"
+	onclick="_Pict.views['Pict-Section-Mapping'].openEditor(null)">+ New mapping</a>`;
+      const LIST_TEMPLATE = /*html*/`
+<div class="psm-list-wrap">
+	{~TS:Pict-Section-Mapping-LoadingState:AppData.Mapping.LoadingSlot~}
+	{~TS:Pict-Section-Mapping-LoadError:AppData.Mapping.LoadErrorSlot~}
+	{~TS:Pict-Section-Mapping-EmptyState:AppData.Mapping.EmptySlot~}
+	{~TS:Pict-Section-Mapping-ListBody:AppData.Mapping.ListBodySlot~}
+</div>`;
+      const LOADING_TEMPLATE = /*html*/`<div class="psm-empty">Loading…</div>`;
+      const LOAD_ERROR_TEMPLATE = /*html*/`
+<div class="psm-error">Failed to load mappings: {~Data:Record.Message~}</div>`;
+      const EMPTY_TEMPLATE = /*html*/`<div class="psm-empty">{~Data:Record.Message~}</div>`;
+      const LIST_BODY_TEMPLATE = /*html*/`
+<div class="psm-list">
+	{~TS:Pict-Section-Mapping-ListRow:AppData.Mapping.Mappings~}
+</div>`;
+      const LIST_ROW_TEMPLATE = /*html*/`
+<div class="psm-list-row" id="psm-row-{~Data:Record.IDMappingConfig~}">
+	<div class="psm-row-name">{~Data:Record.NameOrUnnamed~}{~TS:Pict-Section-Mapping-RowScopeBadge:Record.ScopeBadgeSlot~}</div>
+	<div class="psm-row-desc">{~Data:Record.Description~}</div>
+	<div class="psm-row-flow">{~Data:Record.SourceLabel~} → {~Data:Record.TargetLabel~}</div>
+	<div class="psm-row-actions">{~TS:Pict-Section-Mapping-RowAction:Record.ActionsSlot~}</div>
+	{~TS:Pict-Section-Mapping-RunResult:Record.ResultSlot~}
+</div>`;
+      const ROW_SCOPE_BADGE_TEMPLATE = /*html*/`
+<span class="psm-row-scope">· {~Data:Record.Scope~}</span>`;
+      const ROW_ACTION_TEMPLATE = /*html*/`
+<a class="psm-btn {~Data:Record.ButtonClass~}" href="javascript:void(0)"
+	onclick="_Pict.views['Pict-Section-Mapping'].{~Data:Record.Method~}({~Data:Record.IDMappingConfig~})">{~Data:Record.Label~}</a>`;
+      const RUN_RESULT_TEMPLATE = /*html*/`
+<div class="psm-run-result {~Data:Record.StatusClass~}">
+	<h4>{~Data:Record.Title~}</h4>
+	{~TS:Pict-Section-Mapping-RunErrorMessage:Record.ErrorSlot~}
+	{~TS:Pict-Section-Mapping-RunStat:Record.Stats~}
+</div>`;
+      const RUN_ERROR_TEMPLATE = /*html*/`
+<div class="psm-run-error-message">{~Data:Record.Message~}</div>`;
+      const RUN_STAT_TEMPLATE = /*html*/`
+<div class="psm-run-stat">
+	<span class="psm-stat-label">{~Data:Record.Label~}</span>
+	<span class="psm-stat-value">{~Data:Record.Value~}</span>
+</div>`;
+      const EDITOR_TEMPLATE = /*html*/`
+<div class="psm-editor">
+	<div class="psm-editor-header">
+		<h3>{~Data:Record.HeaderTitle~}</h3>
+	</div>
+	<div class="psm-editor-form">
+		<label>Name</label>
+		<input type="text" placeholder="Human-readable name (e.g. &quot;weather → WeatherSummary&quot;)"
+			value="{~Data:Record.Name~}"
+			onchange="_Pict.views['Pict-Section-Mapping'].setEditingField('Name', this.value)" />
+
+		<label>Scope</label>
+		<input type="text" placeholder="(empty = global)"
+			value="{~Data:Record.Scope~}"
+			onchange="_Pict.views['Pict-Section-Mapping'].setEditingField('Scope', this.value)" />
+
+		<label>Description</label>
+		<input type="text"
+			value="{~Data:Record.Description~}"
+			onchange="_Pict.views['Pict-Section-Mapping'].setEditingField('Description', this.value)" />
+
+		<label>Source ↔ Target</label>
+		<div class="psm-source-target">
+			<div class="psm-st-section">
+				<h4>Source</h4>
+				{~TS:Pict-Section-Mapping-EditorSTRow:Record.SourceFields~}
+			</div>
+			<div class="psm-st-section">
+				<h4>Target</h4>
+				{~TS:Pict-Section-Mapping-EditorSTRow:Record.TargetFields~}
+			</div>
+		</div>
+
+		<label>Configuration (JSON)</label>
+		<div>
+			<textarea spellcheck="false"
+				onchange="_Pict.views['Pict-Section-Mapping'].setEditingField('MappingConfiguration', this.value)">{~Data:Record.MappingConfiguration~}</textarea>
+			<div class="psm-help">
+				meadow-integration shape: <code>{ Entity, GUIDName, GUIDTemplate, Mappings: { TargetField: "{~D:Record.SourceField~}" }, Solvers }</code>.
+			</div>
+		</div>
+	</div>
+
+	{~TS:Pict-Section-Mapping-EditorError:Record.ErrorSlot~}
+
+	<div class="psm-editor-actions">
+		<a class="psm-btn" href="javascript:void(0)"
+			onclick="_Pict.views['Pict-Section-Mapping'].openList()">Cancel</a>
+		<a class="psm-btn psm-btn-primary" href="javascript:void(0)"
+			onclick="_Pict.views['Pict-Section-Mapping'].saveEditing()">{~Data:Record.SaveButtonLabel~}</a>
+	</div>
+</div>`;
+      const EDITOR_ST_ROW_TEMPLATE = /*html*/`
+<div class="psm-st-row">
+	<label>{~Data:Record.Label~}</label>
+	<input type="text" placeholder="{~Data:Record.Field~}"
+		value="{~Data:Record.Value~}"
+		onchange="_Pict.views['Pict-Section-Mapping'].setEditingField('{~Data:Record.Field~}', this.value)" />
+</div>`;
+      const EDITOR_ERROR_TEMPLATE = /*html*/`
+<div class="psm-editor-error">{~Data:Record.Message~}</div>`;
       module.exports = {
         ViewIdentifier: 'Pict-Section-Mapping',
         DefaultRenderable: 'Pict-Section-Mapping-Shell',
         DefaultDestinationAddress: '#Pict-Section-Mapping',
+        DefaultTemplateRecordAddress: 'AppData.Mapping',
         AutoRender: true,
+        RenderOnLoad: false,
         APIBaseUrl: '/mapper',
         Mode: 'manage',
-        // 'manage' | 'list-only'
         ShowToolbar: true,
-        Scope: null
+        Scope: null,
+        WriteToken: null,
+        Templates: [{
+          Hash: 'Pict-Section-Mapping-Shell',
+          Template: SHELL_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-Toolbar',
+          Template: TOOLBAR_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-Toolbar-BackLink',
+          Template: TOOLBAR_BACKLINK_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-Toolbar-NewButton',
+          Template: TOOLBAR_NEWBUTTON_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-List',
+          Template: LIST_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-LoadingState',
+          Template: LOADING_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-LoadError',
+          Template: LOAD_ERROR_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-EmptyState',
+          Template: EMPTY_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-ListBody',
+          Template: LIST_BODY_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-ListRow',
+          Template: LIST_ROW_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-RowScopeBadge',
+          Template: ROW_SCOPE_BADGE_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-RowAction',
+          Template: ROW_ACTION_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-RunResult',
+          Template: RUN_RESULT_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-RunErrorMessage',
+          Template: RUN_ERROR_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-RunStat',
+          Template: RUN_STAT_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-Editor',
+          Template: EDITOR_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-EditorSTRow',
+          Template: EDITOR_ST_ROW_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Mapping-EditorError',
+          Template: EDITOR_ERROR_TEMPLATE
+        }],
+        Renderables: [{
+          RenderableHash: 'Pict-Section-Mapping-Shell',
+          TemplateHash: 'Pict-Section-Mapping-Shell',
+          TemplateRecordAddress: 'AppData.Mapping',
+          DestinationAddress: '#Pict-Section-Mapping',
+          RenderMethod: 'replace'
+        }]
       };
     }, {}],
-    12: [function (require, module, exports) {
+    14: [function (require, module, exports) {
       /**
        * Pict-Section-Mapping
        *
-       * Embeddable Pict view for Mapping CRUD. Mappings are intent docs that
-       * the data-mapper compiles into Ultravisor Operations on demand. The
-       * Run / Save-and-Schedule actions live on the editor and route through
-       * the data-mapper bridge's /uv/* proxy endpoints to Ultravisor.
+       * Embeddable Pict view for Mapping CRUD + Run, surfacing the
+       * retold-data-mapper /mapper/mapping* REST API.
        *
-       *   - List view with per-row Edit / Delete actions
-       *   - Editor with form fields + JSON MappingConfiguration textarea
+       * Template-driven per modules/pict/CLAUDE.md (mirrors pict-section-operation):
+       *   - All state lives in pict.AppData.Mapping.*
+       *   - Templates + Renderables; no document.createElement, no .onclick closures.
+       *   - View switching uses single-element-array slots driven by {~TS:~}.
+       *   - Modal interactions via pict-section-modal; no native popups.
+       *
+       * Modes:
+       *   `manage`     full CRUD (default)
+       *   `list-only`  list-only — Run/Edit/Delete + the New button are suppressed.
+       *
+       * Public API (called by host apps and inline template handlers):
+       *   openList()
+       *   openEditor(pRecOrID)        // null = new
+       *   saveEditing()
+       *   runMapping(pIDMappingConfig)
+       *   deleteMapping(pIDMappingConfig)
+       *   onScopeInput(pValue)
+       *   setEditingField(pName, pValue)
+       *   refresh()
        *
        * Note: the data-mapper also has a separate visual mapping editor
-       * (the existing pict-app at index.html) for graphical field mapping.
-       * This section is the lightweight CRUD surface; the visual editor is
-       * the richer alternative for editing MappingConfiguration.
+       * (the Pict app at index.html) for graphical field mapping. This
+       * section is the lightweight CRUD + Run surface; the visual editor
+       * is the richer alternative for editing MappingConfiguration.
        */
       'use strict';
 
@@ -1982,329 +2438,232 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
           '/* TargetField */': '{~D:Record./* SourceField */~}'
         }
       };
+      const DEFAULT_MAPPING_CONFIGURATION_TEXT = JSON.stringify(DEFAULT_MAPPING_CONFIGURATION, null, 2);
+      const RUN_STAT_FIELDS = ['RowsRead', 'RowsMapped', 'RowsWritten', 'Errors', 'TargetEntity', 'ElapsedMs'];
+      const SOURCE_EDITOR_FIELDS = [{
+        Field: 'SourceBeaconName',
+        Label: 'Beacon'
+      }, {
+        Field: 'SourceConnectionHash',
+        Label: 'Connection'
+      }, {
+        Field: 'SourceEntity',
+        Label: 'Entity'
+      }];
+      const TARGET_EDITOR_FIELDS = [{
+        Field: 'TargetBeaconName',
+        Label: 'Beacon'
+      }, {
+        Field: 'TargetConnectionHash',
+        Label: 'Connection'
+      }, {
+        Field: 'TargetEntity',
+        Label: 'Entity'
+      }];
       class PictSectionMapping extends libPictView {
         constructor(pFable, pOptions, pServiceHash) {
           let tmpOptions = Object.assign({}, libDefaultConf, pOptions || {});
           super(pFable, tmpOptions, pServiceHash);
           this._API = new libAPIProvider({
             APIBaseUrl: this.options.APIBaseUrl,
-            Scope: this.options.Scope
+            Scope: this.options.Scope,
+            WriteToken: this.options.WriteToken
           });
-          this._state = {
-            view: 'list',
-            mappings: [],
-            editing: null
-          };
           if (this.pict && this.pict.CSSMap && typeof this.pict.CSSMap.addCSS === 'function') {
             this.pict.CSSMap.addCSS('Pict-Section-Mapping-CSS', libCSS, 500);
           }
+          this._seedAppData();
+          this._scopeDebounce = null;
         }
-        openList() {
-          this._state.view = 'list';
-          this._state.editing = null;
-          this.render();
+        _seedAppData() {
+          if (!this.pict.AppData) this.pict.AppData = {};
+          this.pict.AppData.Mapping = Object.assign({
+            Mode: this.options.Mode || 'manage',
+            ShowToolbar: !!this.options.ShowToolbar,
+            Scope: this._API.getScope(),
+            View: 'list',
+            // 'list' | 'edit'
+            Mappings: [],
+            Editing: null,
+            EditorError: '',
+            LoadState: 'idle',
+            // 'idle' | 'loading' | 'error' | 'empty' | 'ready'
+            LoadErrorMessage: '',
+            EmptyMessage: '',
+            RunResults: {},
+            ToolbarSlot: [],
+            BackLinkSlot: [],
+            NewButtonSlot: [],
+            ListSlot: [],
+            EditSlot: [],
+            LoadingSlot: [],
+            LoadErrorSlot: [],
+            EmptySlot: [],
+            ListBodySlot: []
+          }, this.pict.AppData.Mapping || {});
         }
-        openEditor(pRec) {
-          this._state.editing = pRec || null;
-          this._state.view = 'edit';
-          this.render();
+
+        // ── Lifecycle ────────────────────────────────────────────────────
+
+        onAfterInitialize() {
+          this._loadList();
+          return super.onAfterInitialize();
         }
-        refresh() {
-          this.render();
+        onBeforeRender(pRenderable, pAddress, pRecord, pContent) {
+          this._populateSlots();
+          return super.onBeforeRender(pRenderable, pAddress, pRecord, pContent);
         }
         onAfterRender(pRenderable, pAddress, pRecord, pContent) {
           this.pict.CSSMap.injectCSS();
-          this._mount();
           return super.onAfterRender(pRenderable, pAddress, pRecord, pContent);
         }
-        _mount() {
-          let tmpDest = this._dest();
-          if (!tmpDest) return;
-          tmpDest.innerHTML = '';
-          tmpDest.classList.add('psm-root');
-          tmpDest.classList.add('psm-mode-' + this.options.Mode);
-          if (this.options.ShowToolbar) tmpDest.appendChild(this._buildToolbar());
-          let tmpContent = document.createElement('div');
-          tmpContent.className = 'psm-content';
-          tmpDest.appendChild(tmpContent);
-          if (this._state.view === 'list') this._mountList(tmpContent);else if (this._state.view === 'edit') this._mountEditor(tmpContent);
-        }
-        _dest() {
-          let tmpAddr = this.options.ContentDestinationAddress;
-          if (!tmpAddr || typeof document === 'undefined') return null;
-          return document.querySelector(tmpAddr);
-        }
-        _buildToolbar() {
-          let tmpBar = document.createElement('div');
-          tmpBar.className = 'psm-toolbar';
-          let tmpTitle = document.createElement('h2');
-          tmpTitle.textContent = 'Mappings';
-          tmpBar.appendChild(tmpTitle);
-          if (this._state.view !== 'list') {
-            let tmpBack = document.createElement('a');
-            tmpBack.className = 'psm-btn';
-            tmpBack.textContent = '← All mappings';
-            tmpBack.href = 'javascript:void(0)';
-            tmpBack.onclick = () => this.openList();
-            tmpBar.appendChild(tmpBack);
-          }
-          let tmpSpacer = document.createElement('span');
-          tmpSpacer.className = 'psm-toolbar-spacer';
-          tmpBar.appendChild(tmpSpacer);
-          let tmpScopeLabel = document.createElement('label');
-          tmpScopeLabel.textContent = 'scope';
-          let tmpScopeInput = document.createElement('input');
-          tmpScopeInput.type = 'text';
-          tmpScopeInput.className = 'psm-scope-input';
-          tmpScopeInput.placeholder = '(global)';
-          tmpScopeInput.spellcheck = false;
-          tmpScopeInput.value = this._API.getScope();
-          let tmpDebounce = null;
-          tmpScopeInput.oninput = () => {
-            clearTimeout(tmpDebounce);
-            tmpDebounce = setTimeout(() => {
-              this._API.setScope(tmpScopeInput.value.trim());
-              this._state.view = 'list';
-              this._state.editing = null;
-              this.render();
-            }, 300);
-          };
-          tmpScopeLabel.appendChild(tmpScopeInput);
-          let tmpScopeHint = document.createElement('span');
-          tmpScopeHint.className = 'psm-scope-hint';
-          tmpScopeHint.textContent = 'empty = global • * = all';
-          tmpScopeLabel.appendChild(tmpScopeHint);
-          tmpBar.appendChild(tmpScopeLabel);
-          if (this.options.Mode === 'manage' && this._state.view === 'list') {
-            let tmpNew = document.createElement('a');
-            tmpNew.className = 'psm-btn psm-btn-primary';
-            tmpNew.textContent = '+ New mapping';
-            tmpNew.href = 'javascript:void(0)';
-            tmpNew.onclick = () => this.openEditor(null);
-            tmpBar.appendChild(tmpNew);
-          }
-          return tmpBar;
-        }
 
-        // ── List view ──────────────────────────────────────────────────
+        // ── Public API ───────────────────────────────────────────────────
 
-        _mountList(pHost) {
-          let tmpStatus = document.createElement('div');
-          tmpStatus.className = 'psm-empty';
-          tmpStatus.textContent = 'Loading…';
-          pHost.appendChild(tmpStatus);
-          this._API.listMappings().then(pData => {
-            pHost.innerHTML = '';
-            let tmpRows = pData && pData.Mappings || [];
-            this._state.mappings = tmpRows;
-            if (tmpRows.length === 0) {
-              let tmpEmpty = document.createElement('div');
-              tmpEmpty.className = 'psm-empty';
-              let tmpScope = this._API.getScope();
-              tmpEmpty.textContent = 'No mappings in ' + (tmpScope === '' ? 'global scope' : 'scope "' + tmpScope + '"') + '. Use scope=* to see all.';
-              pHost.appendChild(tmpEmpty);
-              return;
-            }
-            let tmpList = document.createElement('div');
-            tmpList.className = 'psm-list';
-            for (let i = 0; i < tmpRows.length; i++) tmpList.appendChild(this._buildListRow(tmpRows[i]));
-            pHost.appendChild(tmpList);
-          }).catch(pErr => {
-            pHost.innerHTML = '';
-            let tmpErr = document.createElement('div');
-            tmpErr.className = 'psm-error';
-            tmpErr.textContent = 'Failed to load mappings: ' + pErr.message;
-            pHost.appendChild(tmpErr);
+        openList() {
+          this.pict.AppData.Mapping.View = 'list';
+          this.pict.AppData.Mapping.Editing = null;
+          this.pict.AppData.Mapping.EditorError = '';
+          this._loadList();
+        }
+        openEditor(pRecOrID) {
+          if (pRecOrID == null) {
+            this._openEditorWith(null);
+            return;
+          }
+          if (typeof pRecOrID === 'object') {
+            this._openEditorWith(pRecOrID);
+            return;
+          }
+          let tmpID = parseInt(pRecOrID, 10);
+          let tmpFound = this.pict.AppData.Mapping.Mappings.find(r => r.IDMappingConfig === tmpID);
+          this._openEditorWith(tmpFound || null);
+        }
+        saveEditing() {
+          let tmpRec = this.pict.AppData.Mapping.Editing;
+          if (!tmpRec) {
+            this._toast('Nothing to save.', 'error');
+            return;
+          }
+          if (!tmpRec.Name || !tmpRec.Name.trim()) {
+            this._setEditorError('Name is required.');
+            return;
+          }
+          let tmpConfRaw = typeof tmpRec.MappingConfiguration === 'string' ? tmpRec.MappingConfiguration : JSON.stringify(tmpRec.MappingConfiguration || {}, null, 2);
+          let tmpConfParsed;
+          try {
+            tmpConfParsed = JSON.parse(tmpConfRaw);
+          } catch (pErr) {
+            this._setEditorError('Configuration JSON parse error: ' + pErr.message);
+            return;
+          }
+          let tmpIsNew = !tmpRec.IDMappingConfig;
+          let tmpPayload = Object.assign({}, tmpRec, {
+            MappingConfiguration: tmpConfParsed
           });
+          this._API.saveMapping(tmpPayload).then(() => {
+            this._toast(tmpIsNew ? 'Mapping created.' : 'Mapping saved.', 'success');
+            this.openList();
+          }).catch(pErr => this._setEditorError(pErr.message));
         }
-        _buildListRow(pRow) {
-          let tmpRow = document.createElement('div');
-          tmpRow.className = 'psm-list-row';
-          let tmpName = document.createElement('div');
-          tmpName.className = 'psm-row-name';
-          tmpName.textContent = pRow.Name || '(unnamed)';
-          if (pRow.Scope) {
-            let tmpScope = document.createElement('span');
-            tmpScope.className = 'psm-row-scope';
-            tmpScope.textContent = '· ' + pRow.Scope;
-            tmpName.appendChild(tmpScope);
-          }
-          tmpRow.appendChild(tmpName);
-          let tmpDesc = document.createElement('div');
-          tmpDesc.className = 'psm-row-desc';
-          tmpDesc.textContent = pRow.Description || '';
-          tmpRow.appendChild(tmpDesc);
-          let tmpFlow = document.createElement('div');
-          tmpFlow.className = 'psm-row-flow';
-          tmpFlow.textContent = (pRow.SourceBeaconName || '?') + '/' + (pRow.SourceEntity || '?') + ' → ' + (pRow.TargetBeaconName || '?') + '/' + (pRow.TargetEntity || '?');
-          tmpRow.appendChild(tmpFlow);
-          let tmpActions = document.createElement('div');
-          tmpActions.className = 'psm-row-actions';
-          if (this.options.Mode === 'manage') {
-            let tmpRun = document.createElement('a');
-            tmpRun.className = 'psm-btn psm-btn-success';
-            tmpRun.textContent = '▶ Run via UV';
-            tmpRun.href = 'javascript:void(0)';
-            tmpRun.onclick = () => this._runViaUltravisor(pRow, tmpRow);
-            tmpRun.title = 'Compile this mapping into an Ultravisor Operation, run it through UV\'s queue, and show the manifest summary.';
-            tmpActions.appendChild(tmpRun);
-            let tmpEdit = document.createElement('a');
-            tmpEdit.className = 'psm-btn';
-            tmpEdit.textContent = 'Edit';
-            tmpEdit.href = 'javascript:void(0)';
-            tmpEdit.onclick = () => this.openEditor(pRow);
-            tmpActions.appendChild(tmpEdit);
-            let tmpDel = document.createElement('a');
-            tmpDel.className = 'psm-btn psm-btn-danger';
-            tmpDel.textContent = 'Delete';
-            tmpDel.href = 'javascript:void(0)';
-            tmpDel.onclick = () => this._confirmDelete(pRow);
-            tmpActions.appendChild(tmpDel);
-          }
-          tmpRow.appendChild(tmpActions);
-          return tmpRow;
-        }
-
-        // Compile this mapping into a UV Operation (server-side), run it through
-        // the queue, and render the manifest summary inline. This is the new
-        // "glue" path — the data-mapper UI captures intent, UV does the work.
-        _runViaUltravisor(pRow, pRowEl) {
-          if (!pRow.IDMappingConfig) {
+        runMapping(pIDMappingConfig) {
+          let tmpID = parseInt(pIDMappingConfig, 10);
+          if (!tmpID) {
             this._toast('Run failed: missing IDMappingConfig', 'error');
             return;
           }
-          let tmpRunBtn = pRowEl.querySelector('.psm-btn-success');
-          let tmpOriginal = tmpRunBtn ? tmpRunBtn.textContent : '';
-          if (tmpRunBtn) {
-            tmpRunBtn.textContent = 'Running…';
-            tmpRunBtn.classList.add('psm-btn-disabled');
-          }
-          this._API.runViaUltravisor(pRow.IDMappingConfig).then(pResult => {
-            if (tmpRunBtn) {
-              tmpRunBtn.textContent = tmpOriginal;
-              tmpRunBtn.classList.remove('psm-btn-disabled');
-            }
-            this._renderUVResult(pRowEl, pRow, pResult, false);
+          let tmpMap = this.pict.AppData.Mapping.Mappings.find(r => r.IDMappingConfig === tmpID);
+          let tmpName = tmpMap ? tmpMap.Name || tmpMap.Hash || 'mapping ' + tmpID : 'mapping ' + tmpID;
+          this.pict.AppData.Mapping.RunResults[tmpID] = {
+            Status: 'Running'
+          };
+          this.render();
+          this._API.runMapping(tmpID).then(pResult => {
+            this.pict.AppData.Mapping.RunResults[tmpID] = Object.assign({}, pResult || {}, {
+              Status: 'Success',
+              Hash: tmpName
+            });
+            this.render();
           }).catch(pErr => {
-            if (tmpRunBtn) {
-              tmpRunBtn.textContent = tmpOriginal;
-              tmpRunBtn.classList.remove('psm-btn-disabled');
-            }
-            this._renderUVResult(pRowEl, pRow, {
+            this.pict.AppData.Mapping.RunResults[tmpID] = {
+              Status: 'Error',
+              Hash: tmpName,
               Error: pErr.message
-            }, true);
+            };
+            this.render();
           });
         }
-        _renderUVResult(pRowEl, pRow, pResult, pIsError) {
-          let tmpExisting = pRowEl.nextElementSibling;
-          if (tmpExisting && tmpExisting.classList && tmpExisting.classList.contains('psm-run-result')) tmpExisting.remove();
-          let tmpPanel = document.createElement('div');
-          tmpPanel.className = 'psm-run-result ' + (pIsError ? 'psm-run-error' : 'psm-run-success');
-          let tmpHeader = document.createElement('h4');
-          let tmpName = pRow.Name || pRow.Hash || 'mapping ' + pRow.IDMappingConfig;
-          let tmpUVLabel = pResult && pResult.OperationHash ? ' [' + pResult.OperationHash + ']' : '';
-          tmpHeader.textContent = pIsError ? '✗  ' + tmpName + ' — failed' : '✓  ' + tmpName + tmpUVLabel + ' — ' + (pResult.Status || 'unknown');
-          tmpPanel.appendChild(tmpHeader);
-          if (pIsError) {
-            let tmpErr = document.createElement('div');
-            tmpErr.style.color = '#fecaca';
-            tmpErr.style.fontFamily = 'monospace';
-            tmpErr.style.fontSize = '12px';
-            tmpErr.textContent = pResult.Error;
-            tmpPanel.appendChild(tmpErr);
-          } else {
-            let tmpStats = document.createElement('div');
-            tmpStats.className = 'psm-run-stats';
-            let tmpTopFields = ['ElapsedMs'];
-            for (let i = 0; i < tmpTopFields.length; i++) {
-              if (pResult[tmpTopFields[i]] === undefined || pResult[tmpTopFields[i]] === null) continue;
-              let tmpStat = document.createElement('div');
-              tmpStat.className = 'psm-run-stat';
-              let tmpLabel = document.createElement('span');
-              tmpLabel.className = 'psm-stat-label';
-              tmpLabel.textContent = tmpTopFields[i];
-              let tmpValue = document.createElement('span');
-              tmpValue.className = 'psm-stat-value';
-              tmpValue.textContent = String(pResult[tmpTopFields[i]]);
-              tmpStat.appendChild(tmpLabel);
-              tmpStat.appendChild(tmpValue);
-              tmpStats.appendChild(tmpStat);
-            }
-            tmpPanel.appendChild(tmpStats);
-
-            // Per-task breakdown — pull/map/write counts from the manifest.
-            let tmpTO = pResult.TaskOutputs || {};
-            let tmpTaskKeys = Object.keys(tmpTO);
-            if (tmpTaskKeys.length > 0) {
-              let tmpBreakdown = document.createElement('div');
-              tmpBreakdown.className = 'psm-run-stats';
-              tmpBreakdown.style.marginTop = '8px';
-              for (let k = 0; k < tmpTaskKeys.length; k++) {
-                let tmpKey = tmpTaskKeys[k];
-                let tmpRow = tmpTO[tmpKey];
-                let tmpStat = document.createElement('div');
-                tmpStat.className = 'psm-run-stat';
-                let tmpLabel = document.createElement('span');
-                tmpLabel.className = 'psm-stat-label';
-                tmpLabel.textContent = tmpKey;
-                let tmpValue = document.createElement('span');
-                tmpValue.className = 'psm-stat-value';
-                let tmpParts = [];
-                if (tmpRow.RecordCount !== undefined) tmpParts.push('records=' + tmpRow.RecordCount);
-                if (tmpRow.Written !== undefined) tmpParts.push('written=' + tmpRow.Written);
-                if (tmpRow.Errors !== undefined && tmpRow.Errors !== 0) tmpParts.push('errors=' + tmpRow.Errors);
-                tmpValue.textContent = tmpParts.join('  ');
-                tmpStat.appendChild(tmpLabel);
-                tmpStat.appendChild(tmpValue);
-                tmpBreakdown.appendChild(tmpStat);
-              }
-              tmpPanel.appendChild(tmpBreakdown);
-            }
-          }
-          pRowEl.parentNode.insertBefore(tmpPanel, pRowEl.nextSibling);
-        }
-        _confirmDelete(pRow) {
-          let tmpModal = this.pict.views && this.pict.views.Modal;
-          if (tmpModal && typeof tmpModal.confirm === 'function') {
-            tmpModal.confirm('Delete mapping "' + (pRow.Name || pRow.Hash) + '"? This cannot be undone.', {
-              confirmLabel: 'Delete',
-              cancelLabel: 'Cancel',
-              dangerous: true
-            }).then(pOk => {
-              if (pOk) this._doDelete(pRow);
-            });
-            return;
-          }
-          // eslint-disable-next-line no-alert
-          if (typeof confirm === 'function' && confirm('Delete mapping "' + pRow.Name + '"?')) this._doDelete(pRow);
-        }
-        _doDelete(pRow) {
-          if (!pRow.IDMappingConfig) {
+        deleteMapping(pIDMappingConfig) {
+          let tmpID = parseInt(pIDMappingConfig, 10);
+          if (!tmpID) {
             this._toast('Delete failed: missing IDMappingConfig', 'error');
             return;
           }
-          this._API.deleteMapping(pRow.IDMappingConfig).then(() => {
-            this._toast('Mapping deleted.', 'success');
-            this.openList();
-          }).catch(pErr => this._toast('Delete failed: ' + pErr.message, 'error'));
+          let tmpMap = this.pict.AppData.Mapping.Mappings.find(r => r.IDMappingConfig === tmpID);
+          let tmpLabel = tmpMap ? tmpMap.Name || tmpMap.Hash || 'mapping ' + tmpID : 'mapping ' + tmpID;
+          this._confirm('Delete mapping "' + tmpLabel + '"? This cannot be undone.', {
+            title: 'Delete mapping?',
+            confirmLabel: 'Delete',
+            cancelLabel: 'Cancel',
+            dangerous: true
+          }).then(pOk => {
+            if (!pOk) return;
+            this._API.deleteMapping(tmpID).then(() => {
+              this._toast('Mapping deleted.', 'success');
+              this._loadList();
+            }).catch(pErr => this._toast('Delete failed: ' + pErr.message, 'error'));
+          });
         }
-        _toast(pMsg, pType) {
-          let tmpModal = this.pict.views && this.pict.views.Modal;
-          if (tmpModal && typeof tmpModal.toast === 'function') {
-            tmpModal.toast(pMsg, {
-              type: pType || 'info'
-            });
-            return;
-          }
-          // eslint-disable-next-line no-console
-          console.log('[psm]', pMsg);
+        onScopeInput(pValue) {
+          clearTimeout(this._scopeDebounce);
+          let tmpValue = pValue == null ? '' : String(pValue).trim();
+          this._scopeDebounce = setTimeout(() => {
+            this._API.setScope(tmpValue);
+            this.pict.AppData.Mapping.Scope = tmpValue;
+            this.pict.AppData.Mapping.View = 'list';
+            this.pict.AppData.Mapping.Editing = null;
+            this._loadList();
+          }, 300);
+        }
+        setEditingField(pName, pValue) {
+          if (!this.pict.AppData.Mapping.Editing) return;
+          this.pict.AppData.Mapping.Editing[pName] = pValue;
+          // Silent — no render(), preserves cursor/selection state.
+        }
+        refresh() {
+          this._loadList();
         }
 
-        // ── Editor ─────────────────────────────────────────────────────
+        // ── Internal ─────────────────────────────────────────────────────
 
-        _mountEditor(pHost) {
-          let tmpRec = this._state.editing || {
-            Scope: this._API.getScope(),
+        _loadList() {
+          this.pict.AppData.Mapping.View = 'list';
+          this.pict.AppData.Mapping.LoadState = 'loading';
+          this.pict.AppData.Mapping.LoadErrorMessage = '';
+          this.render();
+          this._API.listMappings().then(pData => {
+            let tmpRows = pData && pData.Mappings || [];
+            this.pict.AppData.Mapping.Mappings = tmpRows;
+            if (tmpRows.length === 0) {
+              let tmpScope = this._API.getScope();
+              this.pict.AppData.Mapping.LoadState = 'empty';
+              this.pict.AppData.Mapping.EmptyMessage = 'No mappings in ' + (tmpScope === '' ? 'global scope' : 'scope "' + tmpScope + '"') + '. Use scope=* to see all.';
+            } else {
+              this.pict.AppData.Mapping.LoadState = 'ready';
+            }
+            this.render();
+          }).catch(pErr => {
+            this.pict.AppData.Mapping.LoadState = 'error';
+            this.pict.AppData.Mapping.LoadErrorMessage = pErr.message || String(pErr);
+            this.render();
+          });
+        }
+        _openEditorWith(pRec) {
+          let tmpScope = this._API.getScope();
+          let tmpEditing = pRec ? Object.assign({}, pRec, {
+            MappingConfiguration: typeof pRec.MappingConfiguration === 'string' ? pRec.MappingConfiguration : JSON.stringify(pRec.MappingConfiguration || {}, null, 2)
+          }) : {
+            Scope: tmpScope,
             Name: '',
             Description: '',
             SourceBeaconName: '',
@@ -2313,255 +2672,174 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
             TargetBeaconName: '',
             TargetConnectionHash: '',
             TargetEntity: '',
-            MappingConfiguration: JSON.stringify(DEFAULT_MAPPING_CONFIGURATION, null, 2)
+            MappingConfiguration: DEFAULT_MAPPING_CONFIGURATION_TEXT
           };
-          let tmpIsNew = !(tmpRec && tmpRec.IDMappingConfig);
-          let tmpConfText = typeof tmpRec.MappingConfiguration === 'string' ? tmpRec.MappingConfiguration : JSON.stringify(tmpRec.MappingConfiguration || {}, null, 2);
-          let tmpWrap = document.createElement('div');
-          tmpWrap.className = 'psm-editor';
-          let tmpHeader = document.createElement('div');
-          tmpHeader.className = 'psm-editor-header';
-          let tmpHeaderTitle = document.createElement('h3');
-          tmpHeaderTitle.textContent = tmpIsNew ? 'New mapping' : 'Edit mapping "' + (tmpRec.Name || tmpRec.IDMappingConfig) + '"';
-          tmpHeader.appendChild(tmpHeaderTitle);
-          tmpWrap.appendChild(tmpHeader);
-          let tmpForm = document.createElement('div');
-          tmpForm.className = 'psm-editor-form';
-          let tmpNameLbl = document.createElement('label');
-          tmpNameLbl.textContent = 'Name';
-          let tmpNameInput = document.createElement('input');
-          tmpNameInput.type = 'text';
-          tmpNameInput.value = tmpRec.Name || '';
-          tmpNameInput.placeholder = 'Human-readable name (e.g. "weather → WeatherSummary")';
-          tmpForm.appendChild(tmpNameLbl);
-          tmpForm.appendChild(tmpNameInput);
-          let tmpScopeLbl = document.createElement('label');
-          tmpScopeLbl.textContent = 'Scope';
-          let tmpScopeInput = document.createElement('input');
-          tmpScopeInput.type = 'text';
-          tmpScopeInput.value = tmpRec.Scope || '';
-          tmpScopeInput.placeholder = '(empty = global)';
-          tmpForm.appendChild(tmpScopeLbl);
-          tmpForm.appendChild(tmpScopeInput);
-          let tmpDescLbl = document.createElement('label');
-          tmpDescLbl.textContent = 'Description';
-          let tmpDescInput = document.createElement('input');
-          tmpDescInput.type = 'text';
-          tmpDescInput.value = tmpRec.Description || '';
-          tmpForm.appendChild(tmpDescLbl);
-          tmpForm.appendChild(tmpDescInput);
-          let tmpSTLbl = document.createElement('label');
-          tmpSTLbl.textContent = 'Source ↔ Target';
-          let tmpST = document.createElement('div');
-          tmpST.className = 'psm-source-target';
-          let tmpSrc = this._buildSTSection('Source', ['SourceBeaconName', 'SourceConnectionHash', 'SourceEntity'], ['Beacon', 'Connection', 'Entity'], [tmpRec.SourceBeaconName, tmpRec.SourceConnectionHash, tmpRec.SourceEntity]);
-          let tmpTgt = this._buildSTSection('Target', ['TargetBeaconName', 'TargetConnectionHash', 'TargetEntity'], ['Beacon', 'Connection', 'Entity'], [tmpRec.TargetBeaconName, tmpRec.TargetConnectionHash, tmpRec.TargetEntity]);
-          tmpST.appendChild(tmpSrc.section);
-          tmpST.appendChild(tmpTgt.section);
-          tmpForm.appendChild(tmpSTLbl);
-          tmpForm.appendChild(tmpST);
-          let tmpConfLbl = document.createElement('label');
-          tmpConfLbl.textContent = 'Configuration (JSON)';
-          let tmpConfWrap = document.createElement('div');
-
-          // Phase C: source-column discovery. "Discover columns" calls the
-          // data-mapper bridge, which dispatches Introspect through UV
-          // to the source beacon and returns the chosen entity's columns.
-          // Each column renders as a chip; clicking inserts a {~D:Record.X~}
-          // template snippet at the textarea's caret. Cuts the typing
-          // without trying to be a full visual mapper.
-          let tmpDiscoverBar = document.createElement('div');
-          tmpDiscoverBar.className = 'psm-discover-bar';
-          let tmpDiscoverBtn = document.createElement('a');
-          tmpDiscoverBtn.className = 'psm-btn psm-btn-secondary';
-          tmpDiscoverBtn.href = 'javascript:void(0)';
-          tmpDiscoverBtn.textContent = '⌕ Discover source columns';
-          tmpDiscoverBtn.title = 'Introspect the source beacon for the columns of the selected source Entity.';
-          tmpDiscoverBar.appendChild(tmpDiscoverBtn);
-          let tmpDiscoverStatus = document.createElement('span');
-          tmpDiscoverStatus.className = 'psm-discover-status';
-          tmpDiscoverStatus.style.marginLeft = '8px';
-          tmpDiscoverStatus.style.fontSize = '12px';
-          tmpDiscoverStatus.style.color = '#94a3b8';
-          tmpDiscoverBar.appendChild(tmpDiscoverStatus);
-          tmpConfWrap.appendChild(tmpDiscoverBar);
-          let tmpChipBar = document.createElement('div');
-          tmpChipBar.className = 'psm-chip-bar';
-          tmpChipBar.style.display = 'none';
-          tmpConfWrap.appendChild(tmpChipBar);
-          let tmpConfTA = document.createElement('textarea');
-          tmpConfTA.spellcheck = false;
-          tmpConfTA.value = tmpConfText;
-          tmpDiscoverBtn.onclick = () => {
-            let tmpBN = tmpSrc.values()[0];
-            let tmpCH = tmpSrc.values()[1];
-            let tmpEN = tmpSrc.values()[2];
-            if (!tmpBN || !tmpCH || !tmpEN) {
-              tmpDiscoverStatus.textContent = 'fill source Beacon, Connection, Entity first';
-              tmpDiscoverStatus.style.color = '#fbbf24';
-              return;
-            }
-            tmpDiscoverStatus.textContent = 'introspecting…';
-            tmpDiscoverStatus.style.color = '#94a3b8';
-            tmpChipBar.innerHTML = '';
-            tmpChipBar.style.display = 'none';
-            this._API.listSourceColumns(tmpBN, tmpCH, tmpEN).then(pResult => {
-              let tmpCols = pResult && pResult.Columns || [];
-              if (tmpCols.length === 0) {
-                tmpDiscoverStatus.textContent = 'no columns returned';
-                tmpDiscoverStatus.style.color = '#fbbf24';
-                return;
-              }
-              tmpDiscoverStatus.textContent = 'click a chip to insert {~D:Record.<col>~} at the cursor';
-              tmpDiscoverStatus.style.color = '#86efac';
-              tmpChipBar.style.display = 'flex';
-              for (let i = 0; i < tmpCols.length; i++) {
-                let tmpCol = tmpCols[i];
-                let tmpChip = document.createElement('a');
-                tmpChip.className = 'psm-chip';
-                tmpChip.href = 'javascript:void(0)';
-                tmpChip.textContent = tmpCol.Name + (tmpCol.DataType ? ' :' + tmpCol.DataType : '');
-                tmpChip.title = 'Insert "' + tmpCol.Name + '": "{~D:Record.' + tmpCol.Name + '~}", at cursor';
-                tmpChip.onclick = () => {
-                  let tmpSnippet = '"' + tmpCol.Name + '": "{~D:Record.' + tmpCol.Name + '~}",';
-                  let tmpStart = tmpConfTA.selectionStart || 0;
-                  let tmpEnd = tmpConfTA.selectionEnd || 0;
-                  let tmpVal = tmpConfTA.value;
-                  tmpConfTA.value = tmpVal.slice(0, tmpStart) + tmpSnippet + tmpVal.slice(tmpEnd);
-                  let tmpCaret = tmpStart + tmpSnippet.length;
-                  tmpConfTA.focus();
-                  tmpConfTA.setSelectionRange(tmpCaret, tmpCaret);
-                };
-                tmpChipBar.appendChild(tmpChip);
-              }
-            }).catch(pErr => {
-              tmpDiscoverStatus.textContent = 'failed: ' + pErr.message;
-              tmpDiscoverStatus.style.color = '#fca5a5';
-            });
-          };
-          let tmpConfHelp = document.createElement('div');
-          tmpConfHelp.className = 'psm-help';
-          tmpConfHelp.innerHTML = 'meadow-integration shape: <code>{ Entity, GUIDName, GUIDTemplate, Mappings: { TargetField: "{~D:Record.SourceField~}" }, Solvers }</code>.';
-          tmpConfWrap.appendChild(tmpConfTA);
-          tmpConfWrap.appendChild(tmpConfHelp);
-          tmpForm.appendChild(tmpConfLbl);
-          tmpForm.appendChild(tmpConfWrap);
-          tmpWrap.appendChild(tmpForm);
-          let tmpErrBox = document.createElement('div');
-          tmpErrBox.className = 'psm-editor-error';
-          tmpErrBox.style.display = 'none';
-          tmpWrap.appendChild(tmpErrBox);
-          let tmpActions = document.createElement('div');
-          tmpActions.className = 'psm-editor-actions';
-          let tmpCancel = document.createElement('a');
-          tmpCancel.className = 'psm-btn';
-          tmpCancel.textContent = 'Cancel';
-          tmpCancel.href = 'javascript:void(0)';
-          tmpCancel.onclick = () => this.openList();
-          tmpActions.appendChild(tmpCancel);
-          let tmpSave = document.createElement('a');
-          tmpSave.className = 'psm-btn psm-btn-primary';
-          tmpSave.textContent = tmpIsNew ? 'Create mapping' : 'Save changes';
-          tmpSave.href = 'javascript:void(0)';
-          tmpSave.onclick = () => {
-            let tmpName = tmpNameInput.value.trim();
-            if (!tmpName) {
-              this._showEditorError(tmpErrBox, 'Name is required.');
-              return;
-            }
-            let tmpConfRaw = tmpConfTA.value;
-            let tmpConfParsed;
-            try {
-              tmpConfParsed = JSON.parse(tmpConfRaw);
-            } catch (pErr) {
-              this._showEditorError(tmpErrBox, 'Configuration JSON parse error: ' + pErr.message);
-              return;
-            }
-            let tmpRecord = {
-              Name: tmpName,
-              Scope: tmpScopeInput.value.trim(),
-              Description: tmpDescInput.value,
-              SourceBeaconName: tmpSrc.values()[0],
-              SourceConnectionHash: tmpSrc.values()[1],
-              SourceEntity: tmpSrc.values()[2],
-              TargetBeaconName: tmpTgt.values()[0],
-              TargetConnectionHash: tmpTgt.values()[1],
-              TargetEntity: tmpTgt.values()[2],
-              MappingConfiguration: tmpConfParsed
-            };
-            if (!tmpIsNew && tmpRec.IDMappingConfig) tmpRecord.IDMappingConfig = tmpRec.IDMappingConfig;
-            tmpSave.textContent = 'Saving…';
-            this._API.saveMapping(tmpRecord).then(() => {
-              this._toast(tmpIsNew ? 'Mapping created.' : 'Mapping saved.', 'success');
-              this.openList();
-            }).catch(pErr => {
-              tmpSave.textContent = tmpIsNew ? 'Create mapping' : 'Save changes';
-              this._showEditorError(tmpErrBox, pErr.message);
-            });
-          };
-          tmpActions.appendChild(tmpSave);
-          tmpWrap.appendChild(tmpActions);
-          pHost.appendChild(tmpWrap);
+          this.pict.AppData.Mapping.Editing = tmpEditing;
+          this.pict.AppData.Mapping.EditorError = '';
+          this.pict.AppData.Mapping.View = 'edit';
+          this.render();
         }
-        _buildSTSection(pTitle, pFieldNames, pLabels, pValues) {
-          let tmpSection = document.createElement('div');
-          tmpSection.className = 'psm-st-section';
-          let tmpHead = document.createElement('h4');
-          tmpHead.textContent = pTitle;
-          tmpSection.appendChild(tmpHead);
-          let tmpInputs = [];
-          for (let i = 0; i < pFieldNames.length; i++) {
-            let tmpRow = document.createElement('div');
-            tmpRow.className = 'psm-st-row';
-            let tmpLabel = document.createElement('label');
-            tmpLabel.textContent = pLabels[i];
-            let tmpInput = document.createElement('input');
-            tmpInput.type = 'text';
-            tmpInput.value = pValues[i] || '';
-            tmpInput.placeholder = pFieldNames[i];
-            tmpRow.appendChild(tmpLabel);
-            tmpRow.appendChild(tmpInput);
-            tmpSection.appendChild(tmpRow);
-            tmpInputs.push(tmpInput);
+        _setEditorError(pMessage) {
+          this.pict.AppData.Mapping.EditorError = pMessage || '';
+          this.render();
+        }
+        _populateSlots() {
+          let tmpData = this.pict.AppData.Mapping;
+          let tmpView = tmpData.View || 'list';
+          let tmpMode = tmpData.Mode || 'manage';
+          let tmpShowToolbar = !!tmpData.ShowToolbar;
+          tmpData.Scope = this._API.getScope();
+          tmpData.ToolbarSlot = tmpShowToolbar ? [{}] : [];
+          tmpData.BackLinkSlot = tmpView !== 'list' ? [{}] : [];
+          tmpData.NewButtonSlot = tmpMode === 'manage' && tmpView === 'list' ? [{}] : [];
+          tmpData.ListSlot = tmpView === 'list' ? [{}] : [];
+          tmpData.EditSlot = tmpView === 'edit' && tmpData.Editing ? [this._buildEditorRecord(tmpData.Editing, tmpData.EditorError)] : [];
+          let tmpState = tmpView === 'list' ? tmpData.LoadState || 'idle' : 'hidden';
+          tmpData.LoadingSlot = tmpState === 'loading' ? [{}] : [];
+          tmpData.LoadErrorSlot = tmpState === 'error' ? [{
+            Message: tmpData.LoadErrorMessage
+          }] : [];
+          tmpData.EmptySlot = tmpState === 'empty' ? [{
+            Message: tmpData.EmptyMessage
+          }] : [];
+          tmpData.ListBodySlot = tmpState === 'ready' ? [{}] : [];
+          if (tmpState === 'ready') {
+            tmpData.Mappings = (tmpData.Mappings || []).map(m => this._decorateMapping(m, tmpMode, tmpData.RunResults));
           }
+        }
+        _decorateMapping(pMapping, pMode, pRunResults) {
+          let tmpID = pMapping.IDMappingConfig;
+          let tmpRunResult = pRunResults && pRunResults[tmpID] ? pRunResults[tmpID] : null;
+          return Object.assign({}, pMapping, {
+            NameOrUnnamed: pMapping.Name || '(unnamed)',
+            SourceLabel: (pMapping.SourceBeaconName || '?') + '/' + (pMapping.SourceEntity || '?'),
+            TargetLabel: (pMapping.TargetBeaconName || '?') + '/' + (pMapping.TargetEntity || '?'),
+            ScopeBadgeSlot: pMapping.Scope ? [{
+              Scope: pMapping.Scope
+            }] : [],
+            ActionsSlot: pMode === 'manage' ? this._buildRowActions(tmpID, tmpRunResult) : [],
+            ResultSlot: tmpRunResult ? [this._buildRunResultRecord(tmpRunResult)] : []
+          });
+        }
+        _buildRowActions(pID, pRunResult) {
+          let tmpRunning = pRunResult && pRunResult.Status === 'Running';
+          return [{
+            IDMappingConfig: pID,
+            Method: 'runMapping',
+            Label: tmpRunning ? 'Running…' : '▶ Run',
+            ButtonClass: tmpRunning ? 'psm-btn-success psm-btn-disabled' : 'psm-btn-success'
+          }, {
+            IDMappingConfig: pID,
+            Method: 'openEditor',
+            Label: 'Edit',
+            ButtonClass: ''
+          }, {
+            IDMappingConfig: pID,
+            Method: 'deleteMapping',
+            Label: 'Delete',
+            ButtonClass: 'psm-btn-danger'
+          }];
+        }
+        _buildRunResultRecord(pRunResult) {
+          let tmpStatus = pRunResult.Status || 'Success';
+          let tmpStats = [];
+          if (tmpStatus === 'Success') {
+            for (let i = 0; i < RUN_STAT_FIELDS.length; i++) {
+              let tmpKey = RUN_STAT_FIELDS[i];
+              if (pRunResult[tmpKey] === undefined || pRunResult[tmpKey] === null) continue;
+              tmpStats.push({
+                Label: tmpKey,
+                Value: String(pRunResult[tmpKey])
+              });
+            }
+          }
+          let tmpName = pRunResult.Hash || '(mapping)';
+          let tmpTitle = tmpStatus === 'Error' ? '✗  ' + tmpName + ' — failed' : tmpStatus === 'Running' ? '… ' + tmpName + ' — running' : '✓  ' + tmpName + ' — completed';
+          let tmpStatusClass = tmpStatus === 'Error' ? 'psm-run-error' : tmpStatus === 'Running' ? 'psm-run-running' : 'psm-run-success';
+          let tmpErrorSlot = tmpStatus === 'Error' && pRunResult.Error ? [{
+            Message: pRunResult.Error
+          }] : [];
           return {
-            section: tmpSection,
-            values: () => tmpInputs.map(i => i.value.trim())
+            Title: tmpTitle,
+            StatusClass: tmpStatusClass,
+            Stats: tmpStats,
+            ErrorSlot: tmpErrorSlot
           };
         }
-        _showEditorError(pBox, pMsg) {
-          pBox.textContent = pMsg;
-          pBox.style.display = '';
+        _buildEditorRecord(pEditing, pErrorMessage) {
+          let tmpIsNew = !pEditing.IDMappingConfig;
+          let tmpSourceFields = SOURCE_EDITOR_FIELDS.map(f => ({
+            Field: f.Field,
+            Label: f.Label,
+            Value: pEditing[f.Field] || ''
+          }));
+          let tmpTargetFields = TARGET_EDITOR_FIELDS.map(f => ({
+            Field: f.Field,
+            Label: f.Label,
+            Value: pEditing[f.Field] || ''
+          }));
+          return {
+            HeaderTitle: tmpIsNew ? 'New mapping' : 'Edit mapping "' + (pEditing.Name || pEditing.IDMappingConfig) + '"',
+            Name: pEditing.Name || '',
+            Scope: pEditing.Scope || '',
+            Description: pEditing.Description || '',
+            SourceFields: tmpSourceFields,
+            TargetFields: tmpTargetFields,
+            MappingConfiguration: pEditing.MappingConfiguration || '',
+            SaveButtonLabel: tmpIsNew ? 'Create mapping' : 'Save changes',
+            ErrorSlot: pErrorMessage ? [{
+              Message: pErrorMessage
+            }] : []
+          };
+        }
+
+        // ── Modal ────────────────────────────────────────────────────────
+
+        _modal() {
+          if (!this.pict || !this.pict.views) return null;
+          return this.pict.views['Pict-Section-Modal'] || this.pict.views.Modal || null;
+        }
+        _confirm(pMessage, pOptions) {
+          let tmpModal = this._modal();
+          if (tmpModal && typeof tmpModal.confirm === 'function') {
+            return tmpModal.confirm(pMessage, pOptions);
+          }
+          this.log.warn('Pict-Section-Mapping: pict-section-modal not present; auto-confirming "' + pMessage + '"');
+          return Promise.resolve(true);
+        }
+        _toast(pMessage, pType) {
+          let tmpModal = this._modal();
+          if (tmpModal && typeof tmpModal.toast === 'function') {
+            tmpModal.toast(pMessage, {
+              type: pType || 'info'
+            });
+            return;
+          }
+          this.log.info('[pict-section-mapping] ' + pMessage);
         }
       }
-      PictSectionMapping.default_configuration = Object.assign({}, libDefaultConf, {
-        Templates: [{
-          Hash: 'Pict-Section-Mapping-Shell',
-          Template: '<div class="psm-shell-anchor"></div>'
-        }],
-        Renderables: [{
-          RenderableHash: 'Pict-Section-Mapping-Shell',
-          TemplateHash: 'Pict-Section-Mapping-Shell',
-          ContentDestinationAddress: libDefaultConf.DefaultDestinationAddress
-        }]
-      });
       module.exports = PictSectionMapping;
-      module.exports.default_configuration = PictSectionMapping.default_configuration;
+      module.exports.default_configuration = libDefaultConf;
       module.exports.APIProvider = libAPIProvider;
+      module.exports.DEFAULT_MAPPING_CONFIGURATION = DEFAULT_MAPPING_CONFIGURATION;
     }, {
-      "./Pict-Section-Mapping-CSS.js": 10,
-      "./Pict-Section-Mapping-DefaultConfiguration.js": 11,
-      "./providers/PictProvider-Mapping-API.js": 13,
-      "pict-view": 32
+      "./Pict-Section-Mapping-CSS.js": 12,
+      "./Pict-Section-Mapping-DefaultConfiguration.js": 13,
+      "./providers/PictProvider-Mapping-API.js": 15,
+      "pict-view": 41
     }],
-    13: [function (require, module, exports) {
+    15: [function (require, module, exports) {
       /**
        * Pict-Section-Mapping API Provider
        *
-       * REST client for the data-mapper /mapper/mappings* surface.
+       * REST client for the data-mapper /mapper/mapping* surface.
        * Uses the same active-scope localStorage key as the dashboard
        * and operation sections so a host mounting any combination
        * of them gets one coherent active scope.
+       *
+       * Bearer-token write gate: when WriteToken is set, POST/PUT/DELETE
+       * carry `Authorization: Bearer <token>` to satisfy the data-mapper's
+       * DATA_MAPPER_WRITE_TOKEN env-driven gate. GET stays open.
        */
       'use strict';
 
@@ -2571,30 +2849,42 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
           let tmpOptions = pOptions || {};
           this._apiBaseUrl = tmpOptions.APIBaseUrl || '/mapper';
           this._scopeOverride = typeof tmpOptions.Scope === 'string' ? tmpOptions.Scope : null;
+          this._writeToken = typeof tmpOptions.WriteToken === 'string' && tmpOptions.WriteToken.length > 0 ? tmpOptions.WriteToken : null;
         }
         getScope(pCallScope) {
           if (typeof pCallScope === 'string') return pCallScope;
           if (typeof this._scopeOverride === 'string') return this._scopeOverride;
-          if (typeof localStorage !== 'undefined') {
-            let tmpStored = localStorage.getItem(SCOPE_STORAGE_KEY);
-            if (tmpStored !== null) return tmpStored;
-          }
+          try {
+            if (typeof localStorage !== 'undefined') {
+              let tmpStored = localStorage.getItem(SCOPE_STORAGE_KEY);
+              if (tmpStored !== null) return tmpStored;
+            }
+          } catch (pErr) {/* opaque origin or disabled storage — fall through */}
           return '';
         }
         setScope(pScope) {
-          if (typeof localStorage !== 'undefined') {
-            if (pScope) localStorage.setItem(SCOPE_STORAGE_KEY, pScope);else localStorage.removeItem(SCOPE_STORAGE_KEY);
-          }
+          try {
+            if (typeof localStorage !== 'undefined') {
+              if (pScope) localStorage.setItem(SCOPE_STORAGE_KEY, pScope);else localStorage.removeItem(SCOPE_STORAGE_KEY);
+            }
+          } catch (pErr) {/* opaque origin or disabled storage — keep in-memory only */}
           this._scopeOverride = typeof pScope === 'string' ? pScope : null;
+        }
+        setWriteToken(pToken) {
+          this._writeToken = typeof pToken === 'string' && pToken.length > 0 ? pToken : null;
         }
         _fetch(pMethod, pPath, pBody) {
           let tmpOpts = {
             method: pMethod,
             headers: {}
           };
+          let tmpIsWrite = pMethod !== 'GET' && pMethod !== 'HEAD';
           if (pBody !== undefined && pBody !== null) {
             tmpOpts.headers['Content-Type'] = 'application/json';
             tmpOpts.body = JSON.stringify(pBody);
+          }
+          if (tmpIsWrite && this._writeToken) {
+            tmpOpts.headers['Authorization'] = 'Bearer ' + this._writeToken;
           }
           return fetch(this._apiBaseUrl + pPath, tmpOpts).then(pRes => {
             if (!pRes.ok) {
@@ -2616,6 +2906,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
         listMappings(pScope) {
           return this._fetch('GET', '/mappings' + this._scopeQuery(pScope));
         }
+        getMapping(pHashOrID, pScope) {
+          return this._fetch('GET', '/mapping/' + encodeURIComponent(pHashOrID) + this._scopeQuery(pScope));
+        }
         saveMapping(pRecord, pScope) {
           let tmpRecord = Object.assign({}, pRecord);
           if (tmpRecord.Scope === undefined) tmpRecord.Scope = this.getScope(pScope);
@@ -2630,25 +2923,1272 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
           return this._fetch('DELETE', '/mapping/' + pID);
         }
 
-        // Phase B "glue": compile this mapping into an Ultravisor Operation,
-        // POST it to UV, trigger via the queue, and return the manifest summary.
-        // Server side does the compile + post + trigger; UI just renders the result.
-        runViaUltravisor(pID) {
+        // Run goes through UV — server route is /mapper/uv/run-mapping/:id.
+        // The previous implementation pointed at /mapping/:id/run which never
+        // existed; runs always returned 404.
+        runMapping(pID) {
           return this._fetch('POST', '/uv/run-mapping/' + pID, {});
         }
 
-        // Phase C: introspection-driven authoring. Fetch the columns for one
-        // entity on a source beacon so the editor can render them as
-        // click-to-insert chips. Server handles the hash→ID resolution.
-        listSourceColumns(pBeaconName, pConnectionHash, pEntity) {
-          let tmpQuery = '?ConnectionHash=' + encodeURIComponent(pConnectionHash) + '&Entity=' + encodeURIComponent(pEntity);
-          return this._fetch('GET', '/beacon/' + encodeURIComponent(pBeaconName) + '/columns' + tmpQuery);
+        // Lake-sample peek for editor convenience — render five rows from a
+        // beacon/connection/entity tuple.
+        peekTable(pBeaconName, pConnectionHash, pEntity, pPageSize, pPage) {
+          return this._fetch('POST', '/dashboard/panel-data', {
+            BeaconName: pBeaconName,
+            ConnectionName: pConnectionHash,
+            Endpoint: pEntity,
+            PageSize: pPageSize || 5,
+            Page: pPage || 0
+          });
         }
       }
       module.exports = MappingAPIProvider;
       module.exports.SCOPE_STORAGE_KEY = SCOPE_STORAGE_KEY;
     }, {}],
-    14: [function (require, module, exports) {
+    16: [function (require, module, exports) {
+      /**
+       * Pict-Section-Operation CSS
+       *
+       * All class names prefixed `pso-` (Pict Section Operation) so the
+       * section can be mounted into any host app without bleeding into
+       * its stylesheet. CSS variables let the host re-theme.
+       */
+      'use strict';
+
+      module.exports = `
+.pso-root
+{
+	--pso-bg:           #0e1a2b;
+	--pso-bg-elev:      #0a1525;
+	--pso-bg-elev-2:    #0f172a;
+	--pso-border:       #1e293b;
+	--pso-border-soft:  #0f1c2f;
+	--pso-fg:           #f8fafc;
+	--pso-fg-soft:      #cbd5e1;
+	--pso-fg-mute:      #94a3b8;
+	--pso-fg-fade:      #64748b;
+	--pso-accent:       #2563eb;
+	--pso-accent-fg:    #ffffff;
+	--pso-success:      #16a34a;
+	--pso-success-fg:   #dcfce7;
+	--pso-danger:       #b91c1c;
+	--pso-danger-fg:    #fecaca;
+	--pso-warning:      #f59e0b;
+	--pso-warning-fg:   #fef3c7;
+
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	background: var(--pso-bg);
+	color: var(--pso-fg);
+	min-height: 100%;
+}
+
+.pso-toolbar
+{
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 16px;
+	background: var(--pso-bg-elev);
+	border-bottom: 1px solid var(--pso-border);
+	flex-wrap: wrap;
+}
+.pso-toolbar h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.pso-toolbar .pso-toolbar-spacer { flex: 1; }
+.pso-toolbar label { color: var(--pso-fg-mute); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+.pso-toolbar input
+{
+	background: var(--pso-bg-elev-2);
+	color: var(--pso-fg);
+	border: 1px solid var(--pso-border);
+	padding: 5px 9px;
+	border-radius: 4px;
+	font-size: 12px;
+	font-family: inherit;
+}
+.pso-toolbar input.pso-scope-input { width: 140px; font-family: monospace; }
+.pso-toolbar .pso-scope-hint { color: var(--pso-fg-fade); font-size: 11px; font-style: italic; }
+.pso-btn
+{
+	background: var(--pso-bg-elev-2);
+	color: var(--pso-fg-soft);
+	border: 1px solid var(--pso-border);
+	padding: 5px 11px;
+	border-radius: 4px;
+	font-size: 12px;
+	cursor: pointer;
+	text-decoration: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.pso-btn:hover { background: #1e293b; color: var(--pso-fg); }
+.pso-btn.pso-btn-primary { background: var(--pso-accent); border-color: var(--pso-accent); color: var(--pso-accent-fg); }
+.pso-btn.pso-btn-primary:hover { background: #1d4ed8; }
+.pso-btn.pso-btn-success { background: var(--pso-success); border-color: var(--pso-success); color: var(--pso-success-fg); }
+.pso-btn.pso-btn-success:hover { background: #15803d; }
+.pso-btn.pso-btn-danger { background: transparent; color: var(--pso-danger-fg); border-color: var(--pso-danger); }
+.pso-btn.pso-btn-danger:hover { background: var(--pso-danger); color: var(--pso-accent-fg); }
+.pso-btn[disabled], .pso-btn.pso-btn-disabled { opacity: 0.5; pointer-events: none; }
+
+.pso-content { padding: 16px; max-width: 1400px; margin: 0 auto; }
+
+/* List view */
+.pso-list-wrap { display: flex; flex-direction: column; gap: 12px; }
+.pso-list-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.pso-tab
+{
+	padding: 5px 12px;
+	border-radius: 4px;
+	font-size: 12px;
+	cursor: pointer;
+	text-decoration: none;
+	background: var(--pso-bg-elev);
+	color: var(--pso-fg-soft);
+	border: 1px solid var(--pso-border);
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+.pso-tab:hover { background: var(--pso-bg-elev-2); color: var(--pso-fg); }
+.pso-tab.pso-tab-active { background: var(--pso-accent); color: var(--pso-accent-fg); border-color: var(--pso-accent); }
+.pso-tab .pso-tab-count
+{
+	font-size: 11px;
+	background: rgba(0,0,0,.25);
+	color: inherit;
+	padding: 0 6px;
+	border-radius: 8px;
+	font-weight: 600;
+}
+.pso-list { display: flex; flex-direction: column; gap: 8px; }
+.pso-list-row
+{
+	display: grid;
+	grid-template-columns: 1.4fr 1.6fr 100px 2fr auto;
+	gap: 12px;
+	padding: 10px 14px;
+	background: var(--pso-bg-elev);
+	border: 1px solid var(--pso-border);
+	border-radius: 6px;
+	align-items: center;
+}
+.pso-list-row .pso-row-hash { font-family: monospace; font-size: 13px; color: var(--pso-fg); font-weight: 600; }
+.pso-list-row .pso-row-name { color: var(--pso-fg-soft); font-size: 13px; }
+.pso-list-row .pso-row-type
+{
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	padding: 3px 8px;
+	border-radius: 3px;
+	background: var(--pso-bg-elev-2);
+	color: var(--pso-fg-soft);
+	border: 1px solid var(--pso-border);
+	display: inline-block;
+	text-align: center;
+}
+.pso-list-row .pso-row-type.pso-type-extraction  { color: #93c5fd; border-color: #1e3a8a; }
+.pso-list-row .pso-row-type.pso-type-aggregation { color: #fcd34d; border-color: #78350f; }
+.pso-list-row .pso-row-type.pso-type-histogram   { color: #c4b5fd; border-color: #4c1d95; }
+.pso-list-row .pso-row-type.pso-type-intersection{ color: #fdba74; border-color: #7c2d12; }
+.pso-list-row .pso-row-flow { font-size: 11px; color: var(--pso-fg-mute); font-family: monospace; }
+.pso-list-row .pso-row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.pso-list-row .pso-row-scope { font-size: 11px; color: var(--pso-fg-fade); font-style: italic; }
+
+.pso-empty, .pso-error
+{
+	padding: 18px;
+	text-align: center;
+	color: var(--pso-fg-fade);
+	font-size: 13px;
+	border: 1px dashed var(--pso-border);
+	border-radius: 6px;
+	background: var(--pso-bg-elev);
+}
+.pso-error { color: #f87171; background: #2a1010; border-color: #2a1010; }
+
+/* Editor */
+.pso-editor { display: flex; flex-direction: column; gap: 14px; }
+.pso-editor-header { display: flex; gap: 12px; align-items: center; }
+.pso-editor-header h3 { margin: 0; font-size: 16px; }
+.pso-editor-form { display: grid; grid-template-columns: 160px 1fr; gap: 10px 14px; align-items: center; }
+.pso-editor-form label { color: var(--pso-fg-mute); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+.pso-editor-form input[type=text], .pso-editor-form select
+{
+	background: var(--pso-bg-elev-2);
+	color: var(--pso-fg);
+	border: 1px solid var(--pso-border);
+	padding: 6px 10px;
+	border-radius: 4px;
+	font-size: 13px;
+	font-family: inherit;
+}
+.pso-editor-form .pso-help { color: var(--pso-fg-fade); font-size: 11px; font-style: italic; }
+.pso-editor-form textarea
+{
+	background: var(--pso-bg-elev-2);
+	color: var(--pso-fg);
+	border: 1px solid var(--pso-border);
+	padding: 8px 10px;
+	border-radius: 4px;
+	font-size: 12px;
+	font-family: monospace;
+	min-height: 220px;
+	resize: vertical;
+	width: 100%;
+	box-sizing: border-box;
+}
+.pso-editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.pso-editor-error { color: #f87171; font-size: 12px; padding: 8px 12px; background: #2a1010; border-radius: 4px; }
+
+.pso-source-target
+{
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 14px;
+	padding: 12px;
+	background: var(--pso-bg-elev-2);
+	border: 1px solid var(--pso-border);
+	border-radius: 4px;
+}
+.pso-source-target .pso-st-section h4 { margin: 0 0 8px 0; color: var(--pso-fg-mute); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.pso-source-target .pso-st-row { display: grid; grid-template-columns: 90px 1fr; gap: 6px; margin-bottom: 6px; align-items: center; }
+.pso-source-target .pso-st-row label { color: var(--pso-fg-fade); font-size: 11px; }
+
+.pso-conf-template
+{
+	background: var(--pso-bg-elev-2);
+	border: 1px solid var(--pso-border);
+	border-radius: 4px;
+	padding: 10px;
+	font-size: 11px;
+	color: var(--pso-fg-mute);
+}
+.pso-conf-template strong { color: var(--pso-fg-soft); display: block; margin-bottom: 6px; }
+.pso-conf-template code { color: var(--pso-fg); background: var(--pso-bg-elev); padding: 1px 5px; border-radius: 2px; font-size: 11px; }
+
+/* Run result */
+.pso-run-result
+{
+	padding: 14px;
+	background: var(--pso-bg-elev);
+	border: 1px solid var(--pso-border);
+	border-radius: 6px;
+	margin-top: 10px;
+	font-size: 13px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.pso-run-result h4 { margin: 0; font-size: 14px; color: var(--pso-fg-soft); }
+.pso-run-result .pso-run-stats { display: flex; gap: 18px; flex-wrap: wrap; }
+.pso-run-result .pso-run-stat { display: flex; flex-direction: column; }
+.pso-run-result .pso-run-stat .pso-stat-label { font-size: 10px; color: var(--pso-fg-mute); text-transform: uppercase; letter-spacing: 0.5px; }
+.pso-run-result .pso-run-stat .pso-stat-value { font-size: 16px; color: var(--pso-fg); font-family: monospace; font-weight: 600; }
+.pso-run-result.pso-run-success { border-color: var(--pso-success); }
+.pso-run-result.pso-run-error   { border-color: var(--pso-danger); }
+.pso-run-result.pso-run-running { border-color: var(--pso-warning); }
+.pso-run-result .pso-run-error-message
+{
+	color: var(--pso-danger-fg);
+	font-family: monospace;
+	font-size: 12px;
+	white-space: pre-wrap;
+}
+`;
+    }, {}],
+    17: [function (require, module, exports) {
+      /**
+       * Pict-Section-Operation default configuration.
+       *
+       * Template-driven view per modules/pict/CLAUDE.md conventions:
+       *   - All state lives in pict.AppData.Operation.*
+       *   - View switching uses single-element-array slots (ListSlot / EditSlot)
+       *     so the parent template iterates a 0-or-1 element array via {~TS:~};
+       *     no JS-side conditionals that produce HTML strings.
+       *   - All inline handlers reach the section via _Pict.views['Pict-Section-Operation'].method(args).
+       *   - Modal interactions go through pict-section-modal (.confirm / .toast / .show).
+       */
+      'use strict';
+
+      const SHELL_TEMPLATE = /*html*/`
+<div class="pso-root pso-mode-{~Data:AppData.Operation.Mode~}">
+	{~TS:Pict-Section-Operation-Toolbar:AppData.Operation.ToolbarSlot~}
+	<div class="pso-content">
+		{~TS:Pict-Section-Operation-List:AppData.Operation.ListSlot~}
+		{~TS:Pict-Section-Operation-Editor:AppData.Operation.EditSlot~}
+	</div>
+</div>`;
+      const TOOLBAR_TEMPLATE = /*html*/`
+<div class="pso-toolbar">
+	<h2>Operations</h2>
+	{~TS:Pict-Section-Operation-Toolbar-BackLink:AppData.Operation.BackLinkSlot~}
+	<span class="pso-toolbar-spacer"></span>
+	<label>scope
+		<input type="text" class="pso-scope-input" spellcheck="false" placeholder="(global)"
+			value="{~Data:AppData.Operation.Scope~}"
+			oninput="_Pict.views['Pict-Section-Operation'].onScopeInput(this.value)" />
+		<span class="pso-scope-hint">empty = global • * = all</span>
+	</label>
+	{~TS:Pict-Section-Operation-Toolbar-NewButton:AppData.Operation.NewButtonSlot~}
+</div>`;
+      const TOOLBAR_BACKLINK_TEMPLATE = /*html*/`
+<a class="pso-btn" href="javascript:void(0)"
+	onclick="_Pict.views['Pict-Section-Operation'].openList()">← All operations</a>`;
+      const TOOLBAR_NEWBUTTON_TEMPLATE = /*html*/`
+<a class="pso-btn pso-btn-primary" href="javascript:void(0)"
+	onclick="_Pict.views['Pict-Section-Operation'].openEditor(null)">+ New operation</a>`;
+      const LIST_TEMPLATE = /*html*/`
+<div class="pso-list-wrap">
+	{~TS:Pict-Section-Operation-LoadingState:AppData.Operation.LoadingSlot~}
+	{~TS:Pict-Section-Operation-LoadError:AppData.Operation.LoadErrorSlot~}
+	{~TS:Pict-Section-Operation-EmptyState:AppData.Operation.EmptySlot~}
+	{~TS:Pict-Section-Operation-ListBody:AppData.Operation.ListBodySlot~}
+</div>`;
+      const LOADING_TEMPLATE = /*html*/`
+<div class="pso-empty">Loading…</div>`;
+      const LOAD_ERROR_TEMPLATE = /*html*/`
+<div class="pso-error">Failed to load operations: {~Data:Record.Message~}</div>`;
+      const EMPTY_TEMPLATE = /*html*/`
+<div class="pso-empty">{~Data:Record.Message~}</div>`;
+      const LIST_BODY_TEMPLATE = /*html*/`
+<div class="pso-list-tabs">
+	{~TS:Pict-Section-Operation-Tab:AppData.Operation.Tabs~}
+</div>
+<div class="pso-list">
+	{~TS:Pict-Section-Operation-FilteredEmpty:AppData.Operation.FilteredEmptySlot~}
+	{~TS:Pict-Section-Operation-ListRow:AppData.Operation.FilteredOperations~}
+</div>`;
+      const TAB_TEMPLATE = /*html*/`
+<a class="pso-tab pso-tab-{~Data:Record.ActiveClass~}" href="javascript:void(0)"
+	onclick="_Pict.views['Pict-Section-Operation'].selectTab('{~Data:Record.Key~}')">
+	{~Data:Record.Label~}<span class="pso-tab-count">{~Data:Record.Count~}</span>
+</a>`;
+      const FILTERED_EMPTY_TEMPLATE = /*html*/`
+<div class="pso-empty">No operations in this tab. Switch to <strong>All</strong> to see everything.</div>`;
+      const LIST_ROW_TEMPLATE = /*html*/`
+<div class="pso-list-row" id="pso-row-{~Data:Record.IDOperationConfig~}">
+	<div class="pso-row-hash">{~Data:Record.Hash~}{~TS:Pict-Section-Operation-RowScopeBadge:Record.ScopeBadgeSlot~}</div>
+	<div class="pso-row-name">{~Data:Record.NameOrUnnamed~}</div>
+	<div><span class="pso-row-type pso-type-{~Data:Record.OperationTypeLower~}">{~Data:Record.OperationType~}</span></div>
+	<div class="pso-row-flow">{~Data:Record.SourceLabel~} → {~Data:Record.TargetLabel~}</div>
+	<div class="pso-row-actions">{~TS:Pict-Section-Operation-RowAction:Record.ActionsSlot~}</div>
+	{~TS:Pict-Section-Operation-RunResult:Record.ResultSlot~}
+</div>`;
+      const ROW_SCOPE_BADGE_TEMPLATE = /*html*/`
+<span class="pso-row-scope">· {~Data:Record.Scope~}</span>`;
+      const ROW_ACTION_TEMPLATE = /*html*/`
+<a class="pso-btn {~Data:Record.ButtonClass~}" href="javascript:void(0)"
+	onclick="_Pict.views['Pict-Section-Operation'].{~Data:Record.Method~}({~Data:Record.IDOperationConfig~})">{~Data:Record.Label~}</a>`;
+      const RUN_RESULT_TEMPLATE = /*html*/`
+<div class="pso-run-result {~Data:Record.StatusClass~}">
+	<h4>{~Data:Record.Title~}</h4>
+	{~TS:Pict-Section-Operation-RunErrorMessage:Record.ErrorSlot~}
+	{~TS:Pict-Section-Operation-RunStat:Record.Stats~}
+</div>`;
+      const RUN_ERROR_TEMPLATE = /*html*/`
+<div class="pso-run-error-message">{~Data:Record.Message~}</div>`;
+      const RUN_STAT_TEMPLATE = /*html*/`
+<div class="pso-run-stat">
+	<span class="pso-stat-label">{~Data:Record.Label~}</span>
+	<span class="pso-stat-value">{~Data:Record.Value~}</span>
+</div>`;
+
+      // Editor — the form is fully template-rendered. Inputs use onchange to
+      // push values back to AppData via setEditingField (no re-render — just
+      // a silent state update). The Save button reads from AppData.
+      const EDITOR_TEMPLATE = /*html*/`
+<div class="pso-editor">
+	<div class="pso-editor-header">
+		<h3>{~Data:Record.HeaderTitle~}</h3>
+	</div>
+	<div class="pso-editor-form">
+		<label>Hash</label>
+		<input type="text" placeholder="short-identifier"
+			value="{~Data:Record.Hash~}"
+			{~Data:Record.HashDisabledAttr~}
+			onchange="_Pict.views['Pict-Section-Operation'].setEditingField('Hash', this.value)" />
+
+		<label>Scope</label>
+		<input type="text" placeholder="(empty = global)"
+			value="{~Data:Record.Scope~}"
+			onchange="_Pict.views['Pict-Section-Operation'].setEditingField('Scope', this.value)" />
+
+		<label>Name</label>
+		<input type="text" placeholder="Human-readable name"
+			value="{~Data:Record.Name~}"
+			onchange="_Pict.views['Pict-Section-Operation'].setEditingField('Name', this.value)" />
+
+		<label>Description</label>
+		<input type="text"
+			value="{~Data:Record.Description~}"
+			onchange="_Pict.views['Pict-Section-Operation'].setEditingField('Description', this.value)" />
+
+		<label>Type</label>
+		<select onchange="_Pict.views['Pict-Section-Operation'].onTypeChange(this.value)">
+			{~TS:Pict-Section-Operation-EditorTypeOption:Record.TypeOptions~}
+		</select>
+
+		<label>Source ↔ Target</label>
+		<div class="pso-source-target">
+			<div class="pso-st-section">
+				<h4>Source</h4>
+				{~TS:Pict-Section-Operation-EditorSTRow:Record.SourceFields~}
+			</div>
+			<div class="pso-st-section">
+				<h4>Target</h4>
+				{~TS:Pict-Section-Operation-EditorSTRow:Record.TargetFields~}
+			</div>
+		</div>
+
+		<label>Configuration (JSON)</label>
+		<div>
+			<textarea spellcheck="false"
+				onchange="_Pict.views['Pict-Section-Operation'].setEditingField('OperationConfiguration', this.value)">{~Data:Record.OperationConfiguration~}</textarea>
+			<div class="pso-conf-template">
+				<strong>{~Data:Record.OperationType~} shape:</strong>
+				<div>{~Data:Record.TypeHelp~}</div>
+			</div>
+		</div>
+	</div>
+
+	{~TS:Pict-Section-Operation-EditorError:Record.ErrorSlot~}
+
+	<div class="pso-editor-actions">
+		<a class="pso-btn" href="javascript:void(0)"
+			onclick="_Pict.views['Pict-Section-Operation'].openList()">Cancel</a>
+		<a class="pso-btn pso-btn-primary" href="javascript:void(0)"
+			onclick="_Pict.views['Pict-Section-Operation'].saveEditing()">{~Data:Record.SaveButtonLabel~}</a>
+	</div>
+</div>`;
+      const EDITOR_TYPE_OPTION_TEMPLATE = /*html*/`
+<option value="{~Data:Record.Value~}" {~Data:Record.SelectedAttr~}>{~Data:Record.Label~}</option>`;
+      const EDITOR_ST_ROW_TEMPLATE = /*html*/`
+<div class="pso-st-row">
+	<label>{~Data:Record.Label~}</label>
+	<input type="text" placeholder="{~Data:Record.Field~}"
+		value="{~Data:Record.Value~}"
+		onchange="_Pict.views['Pict-Section-Operation'].setEditingField('{~Data:Record.Field~}', this.value)" />
+</div>`;
+      const EDITOR_ERROR_TEMPLATE = /*html*/`
+<div class="pso-editor-error">{~Data:Record.Message~}</div>`;
+      module.exports = {
+        ViewIdentifier: 'Pict-Section-Operation',
+        DefaultRenderable: 'Pict-Section-Operation-Shell',
+        DefaultDestinationAddress: '#Pict-Section-Operation',
+        DefaultTemplateRecordAddress: 'AppData.Operation',
+        AutoRender: true,
+        RenderOnLoad: false,
+        // Section-specific (read in the section class):
+        APIBaseUrl: '/mapper',
+        Mode: 'manage',
+        // 'manage' | 'list-only'
+        ShowToolbar: true,
+        Scope: null,
+        WriteToken: null,
+        // bearer token for POST/PUT/DELETE if DATA_MAPPER_WRITE_TOKEN is set on the server
+
+        Templates: [{
+          Hash: 'Pict-Section-Operation-Shell',
+          Template: SHELL_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-Toolbar',
+          Template: TOOLBAR_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-Toolbar-BackLink',
+          Template: TOOLBAR_BACKLINK_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-Toolbar-NewButton',
+          Template: TOOLBAR_NEWBUTTON_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-List',
+          Template: LIST_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-LoadingState',
+          Template: LOADING_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-LoadError',
+          Template: LOAD_ERROR_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-EmptyState',
+          Template: EMPTY_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-ListBody',
+          Template: LIST_BODY_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-Tab',
+          Template: TAB_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-FilteredEmpty',
+          Template: FILTERED_EMPTY_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-ListRow',
+          Template: LIST_ROW_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-RowScopeBadge',
+          Template: ROW_SCOPE_BADGE_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-RowAction',
+          Template: ROW_ACTION_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-RunResult',
+          Template: RUN_RESULT_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-RunErrorMessage',
+          Template: RUN_ERROR_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-RunStat',
+          Template: RUN_STAT_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-Editor',
+          Template: EDITOR_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-EditorTypeOption',
+          Template: EDITOR_TYPE_OPTION_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-EditorSTRow',
+          Template: EDITOR_ST_ROW_TEMPLATE
+        }, {
+          Hash: 'Pict-Section-Operation-EditorError',
+          Template: EDITOR_ERROR_TEMPLATE
+        }],
+        Renderables: [{
+          RenderableHash: 'Pict-Section-Operation-Shell',
+          TemplateHash: 'Pict-Section-Operation-Shell',
+          TemplateRecordAddress: 'AppData.Operation',
+          DestinationAddress: '#Pict-Section-Operation',
+          RenderMethod: 'replace'
+        }]
+      };
+    }, {}],
+    18: [function (require, module, exports) {
+      /**
+       * Pict-Section-Operation
+       *
+       * Embeddable Pict view for Operation CRUD + Run, surfacing the
+       * retold-data-mapper /mapper/operations* REST API.
+       *
+       * Template-driven per modules/pict/CLAUDE.md:
+       *   - All state lives in pict.AppData.Operation.*
+       *   - Templates + Renderables (no document.createElement, no .onclick closures
+       *     attached in JS — every handler is inline in the template HTML and reaches
+       *     the section via _Pict.views['Pict-Section-Operation'].method(args)).
+       *   - View switching uses single-element-array slots driven by {~TS:~}.
+       *   - Modal interactions go through pict-section-modal (the host's Modal view);
+       *     no native window.confirm / alert / prompt anywhere.
+       *
+       * Modes:
+       *   `manage`     full CRUD (default)
+       *   `list-only`  list-only — Run/Edit/Delete + the New button are suppressed.
+       *
+       * Public API (called by host apps and inline template handlers):
+       *   openList()
+       *   openEditor(pRecOrID)        // null = new
+       *   saveEditing()
+       *   runOperation(pIDOperationConfig)
+       *   deleteOperation(pIDOperationConfig)
+       *   selectTab(pTabKey)
+       *   onScopeInput(pValue)
+       *   setEditingField(pName, pValue)
+       *   onTypeChange(pNewType)
+       *   refresh()
+       *
+       * The active-scope localStorage key is shared with pict-section-mapping
+       * and pict-section-dashboard, so a host that mounts more than one gets a
+       * single coherent scope context.
+       */
+      'use strict';
+
+      const libPictView = require('pict-view');
+      const libDefaultConf = require('./Pict-Section-Operation-DefaultConfiguration.js');
+      const libCSS = require('./Pict-Section-Operation-CSS.js');
+      const libAPIProvider = require('./providers/PictProvider-Operation-API.js');
+      const KNOWN_TYPES = ['Extraction', 'Aggregation', 'Histogram', 'Intersection'];
+      const DEFAULT_CONF_BY_TYPE = {
+        Extraction: {
+          Filter: {
+            '/* column */': '/* value */'
+          },
+          Columns: ['/* column-to-include */']
+        },
+        Aggregation: {
+          GroupBy: ['/* clustering-column */'],
+          Aggregates: [{
+            As: '/* AliasName */',
+            Op: 'COUNT',
+            Column: '*'
+          }]
+        },
+        Histogram: {
+          Column: '/* column-to-bucket */',
+          Buckets: 10
+        },
+        Intersection: {
+          LeftEntity: '/* other-entity-name */',
+          JoinKey: '/* shared-column */',
+          ResultColumns: []
+        }
+      };
+      const TYPE_HELP = {
+        Extraction: 'Filter (where-clause) + Columns (select-list). Each row in the source that matches the filter becomes a row in the target.',
+        Aggregation: 'GroupBy (clustering keys) + Aggregates (COUNT/SUM/AVG/MIN/MAX over a Column, output as As). One row per unique GroupBy combination.',
+        Histogram: 'Bucket counts for a Column. The runner uses BucketKind (DateMonth/DateDay/DateYear/NumericRange) to decide bucketing strategy.',
+        Intersection: 'Join the source against another entity by JoinKey, project ResultColumns. Filters and OrderBy are honored.'
+      };
+      const SCAFFOLD_TEXT_BY_TYPE = function () {
+        let tmpResult = {};
+        let tmpKeys = Object.keys(DEFAULT_CONF_BY_TYPE);
+        for (let i = 0; i < tmpKeys.length; i++) {
+          tmpResult[tmpKeys[i]] = JSON.stringify(DEFAULT_CONF_BY_TYPE[tmpKeys[i]], null, 2);
+        }
+        return tmpResult;
+      }();
+      const SCAFFOLD_TEXT_VALUES = Object.values(SCAFFOLD_TEXT_BY_TYPE);
+      const RUN_STAT_FIELDS = ['RowsRead', 'GroupsBuilt', 'RowsWritten', 'Errors', 'TargetTable', 'ElapsedMs'];
+      const SOURCE_EDITOR_FIELDS = [{
+        Field: 'SourceBeaconName',
+        Label: 'Beacon'
+      }, {
+        Field: 'SourceConnectionHash',
+        Label: 'Connection'
+      }, {
+        Field: 'SourceEntity',
+        Label: 'Entity'
+      }];
+      const TARGET_EDITOR_FIELDS = [{
+        Field: 'TargetBeaconName',
+        Label: 'Beacon'
+      }, {
+        Field: 'TargetConnectionHash',
+        Label: 'Connection'
+      }, {
+        Field: 'TargetTable',
+        Label: 'Table'
+      }];
+      class PictSectionOperation extends libPictView {
+        constructor(pFable, pOptions, pServiceHash) {
+          let tmpOptions = Object.assign({}, libDefaultConf, pOptions || {});
+          super(pFable, tmpOptions, pServiceHash);
+          this._API = new libAPIProvider({
+            APIBaseUrl: this.options.APIBaseUrl,
+            Scope: this.options.Scope,
+            WriteToken: this.options.WriteToken
+          });
+
+          // CSS registration via the documented CSSMap API. Idempotent on hash.
+          if (this.pict && this.pict.CSSMap && typeof this.pict.CSSMap.addCSS === 'function') {
+            this.pict.CSSMap.addCSS('Pict-Section-Operation-CSS', libCSS, 500);
+          }
+
+          // Seed the AppData shape this section reads from. Done in the
+          // constructor (rather than a lifecycle hook) so a host that calls
+          // methods like `setScope()` before the first render still hits a
+          // consistent shape.
+          this._seedAppData();
+
+          // Debounce token for the scope input (CLAUDE.md says no
+          // addEventListener; the debounce lives in the public method).
+          this._scopeDebounce = null;
+        }
+
+        // ── Initialization ───────────────────────────────────────────────
+
+        _seedAppData() {
+          if (!this.pict.AppData) this.pict.AppData = {};
+          this.pict.AppData.Operation = Object.assign({
+            Mode: this.options.Mode || 'manage',
+            ShowToolbar: !!this.options.ShowToolbar,
+            Scope: this._API.getScope(),
+            View: 'list',
+            // 'list' | 'edit'
+            CurrentTab: 'All',
+            Operations: [],
+            FilteredOperations: [],
+            Tabs: [],
+            Editing: null,
+            EditorError: '',
+            LoadState: 'idle',
+            // 'idle' | 'loading' | 'error' | 'empty' | 'ready'
+            LoadErrorMessage: '',
+            EmptyMessage: '',
+            RunResults: {},
+            // keyed by IDOperationConfig
+
+            // Slots populated by onBeforeRender — do not write directly.
+            ToolbarSlot: [],
+            BackLinkSlot: [],
+            NewButtonSlot: [],
+            ListSlot: [],
+            EditSlot: [],
+            LoadingSlot: [],
+            LoadErrorSlot: [],
+            EmptySlot: [],
+            ListBodySlot: [],
+            FilteredEmptySlot: []
+          }, this.pict.AppData.Operation || {});
+        }
+
+        // ── Lifecycle ────────────────────────────────────────────────────
+
+        onAfterInitialize() {
+          // First render kicks off the list load; subsequent reloads come
+          // from refresh() / scope changes / save+delete callbacks.
+          this._loadList();
+          return super.onAfterInitialize();
+        }
+        onBeforeRender(pRenderable, pAddress, pRecord, pContent) {
+          this._populateSlots();
+          return super.onBeforeRender(pRenderable, pAddress, pRecord, pContent);
+        }
+        onAfterRender(pRenderable, pAddress, pRecord, pContent) {
+          this.pict.CSSMap.injectCSS();
+          return super.onAfterRender(pRenderable, pAddress, pRecord, pContent);
+        }
+
+        // ── Public API (called from inline template handlers + host apps) ────
+
+        openList() {
+          this.pict.AppData.Operation.View = 'list';
+          this.pict.AppData.Operation.Editing = null;
+          this.pict.AppData.Operation.EditorError = '';
+          this._loadList();
+        }
+        openEditor(pRecOrID) {
+          // pRecOrID may be: null (new), a record object, or an integer
+          // IDOperationConfig (from inline onclick handlers, where the
+          // argument arrives as a number after template substitution).
+          if (pRecOrID == null) {
+            this._openEditorWith(null);
+            return;
+          }
+          if (typeof pRecOrID === 'object') {
+            this._openEditorWith(pRecOrID);
+            return;
+          }
+          // Numeric ID — look up the loaded record.
+          let tmpID = parseInt(pRecOrID, 10);
+          let tmpFound = this.pict.AppData.Operation.Operations.find(r => r.IDOperationConfig === tmpID);
+          this._openEditorWith(tmpFound || null);
+        }
+        saveEditing() {
+          let tmpRec = this.pict.AppData.Operation.Editing;
+          if (!tmpRec) {
+            this._toast('Nothing to save.', 'error');
+            return;
+          }
+          if (!tmpRec.Hash || !tmpRec.Hash.trim()) {
+            this._setEditorError('Hash is required.');
+            return;
+          }
+          let tmpConfRaw = typeof tmpRec.OperationConfiguration === 'string' ? tmpRec.OperationConfiguration : JSON.stringify(tmpRec.OperationConfiguration || {}, null, 2);
+          let tmpConfParsed;
+          try {
+            tmpConfParsed = JSON.parse(tmpConfRaw);
+          } catch (pErr) {
+            this._setEditorError('Configuration JSON parse error: ' + pErr.message);
+            return;
+          }
+          let tmpIsNew = !tmpRec.IDOperationConfig;
+          let tmpPayload = Object.assign({}, tmpRec, {
+            OperationConfiguration: tmpConfParsed
+          });
+          this._API.saveOperation(tmpPayload).then(() => {
+            this._toast(tmpIsNew ? 'Operation created.' : 'Operation saved.', 'success');
+            this.openList();
+          }).catch(pErr => this._setEditorError(pErr.message));
+        }
+        runOperation(pIDOperationConfig) {
+          let tmpID = parseInt(pIDOperationConfig, 10);
+          if (!tmpID) {
+            this._toast('Run failed: missing IDOperationConfig', 'error');
+            return;
+          }
+          let tmpOp = this.pict.AppData.Operation.Operations.find(r => r.IDOperationConfig === tmpID);
+          let tmpHash = tmpOp ? tmpOp.Hash : 'id ' + tmpID;
+
+          // Mark this row as running so onBeforeRender's slot-builder can
+          // flip the button state on next render.
+          this.pict.AppData.Operation.RunResults[tmpID] = {
+            Status: 'Running'
+          };
+          this.render();
+          this._API.runOperation(tmpID).then(pResult => {
+            this.pict.AppData.Operation.RunResults[tmpID] = Object.assign({}, pResult || {}, {
+              Status: 'Success',
+              Hash: tmpHash
+            });
+            this.render();
+          }).catch(pErr => {
+            this.pict.AppData.Operation.RunResults[tmpID] = {
+              Status: 'Error',
+              Hash: tmpHash,
+              Error: pErr.message
+            };
+            this.render();
+          });
+        }
+        deleteOperation(pIDOperationConfig) {
+          let tmpID = parseInt(pIDOperationConfig, 10);
+          if (!tmpID) {
+            this._toast('Delete failed: missing IDOperationConfig', 'error');
+            return;
+          }
+          let tmpOp = this.pict.AppData.Operation.Operations.find(r => r.IDOperationConfig === tmpID);
+          let tmpLabel = tmpOp ? tmpOp.Name || tmpOp.Hash : 'operation ' + tmpID;
+          this._confirm('Delete operation "' + tmpLabel + '"? This cannot be undone.', {
+            title: 'Delete operation?',
+            confirmLabel: 'Delete',
+            cancelLabel: 'Cancel',
+            dangerous: true
+          }).then(pOk => {
+            if (!pOk) return;
+            this._API.deleteOperation(tmpID).then(() => {
+              this._toast('Operation deleted.', 'success');
+              this._loadList();
+            }).catch(pErr => this._toast('Delete failed: ' + pErr.message, 'error'));
+          });
+        }
+        selectTab(pTabKey) {
+          this.pict.AppData.Operation.CurrentTab = String(pTabKey || 'All');
+          this.render();
+        }
+        onScopeInput(pValue) {
+          // Debounce 300ms so typing doesn't fire a request per keystroke.
+          clearTimeout(this._scopeDebounce);
+          let tmpValue = pValue == null ? '' : String(pValue).trim();
+          this._scopeDebounce = setTimeout(() => {
+            this._API.setScope(tmpValue);
+            this.pict.AppData.Operation.Scope = tmpValue;
+            this.pict.AppData.Operation.View = 'list';
+            this.pict.AppData.Operation.Editing = null;
+            this._loadList();
+          }, 300);
+        }
+        setEditingField(pName, pValue) {
+          if (!this.pict.AppData.Operation.Editing) return;
+          this.pict.AppData.Operation.Editing[pName] = pValue;
+          // Silent update — no render(). Re-rendering on every keystroke
+          // would clobber the input's cursor + selection state.
+        }
+        onTypeChange(pNewType) {
+          if (!this.pict.AppData.Operation.Editing) return;
+          let tmpNew = String(pNewType || 'Extraction');
+          this.pict.AppData.Operation.Editing.OperationType = tmpNew;
+          // Reseed the JSON config if it currently matches one of the known
+          // scaffolds (i.e. the user hasn't customized it).
+          let tmpCurrent = (this.pict.AppData.Operation.Editing.OperationConfiguration || '').trim();
+          if (!tmpCurrent || SCAFFOLD_TEXT_VALUES.indexOf(tmpCurrent) >= 0) {
+            this.pict.AppData.Operation.Editing.OperationConfiguration = SCAFFOLD_TEXT_BY_TYPE[tmpNew] || '';
+          }
+          this.render();
+        }
+        refresh() {
+          this._loadList();
+        }
+
+        // ── Internal helpers ─────────────────────────────────────────────
+
+        _loadList() {
+          this.pict.AppData.Operation.View = 'list';
+          this.pict.AppData.Operation.LoadState = 'loading';
+          this.pict.AppData.Operation.LoadErrorMessage = '';
+          this.render();
+          this._API.listOperations().then(pData => {
+            let tmpRows = pData && pData.Operations || [];
+            this.pict.AppData.Operation.Operations = tmpRows;
+            if (tmpRows.length === 0) {
+              let tmpScope = this._API.getScope();
+              this.pict.AppData.Operation.LoadState = 'empty';
+              this.pict.AppData.Operation.EmptyMessage = 'No operations in ' + (tmpScope === '' ? 'global scope' : 'scope "' + tmpScope + '"') + '. Use scope=* to see all.';
+            } else {
+              this.pict.AppData.Operation.LoadState = 'ready';
+            }
+            this.render();
+          }).catch(pErr => {
+            this.pict.AppData.Operation.LoadState = 'error';
+            this.pict.AppData.Operation.LoadErrorMessage = pErr.message || String(pErr);
+            this.render();
+          });
+        }
+        _openEditorWith(pRec) {
+          let tmpScope = this._API.getScope();
+          let tmpEditing = pRec ? Object.assign({}, pRec, {
+            OperationConfiguration: typeof pRec.OperationConfiguration === 'string' ? pRec.OperationConfiguration : JSON.stringify(pRec.OperationConfiguration || {}, null, 2)
+          }) : {
+            Hash: '',
+            Scope: tmpScope,
+            Name: '',
+            Description: '',
+            OperationType: 'Extraction',
+            SourceBeaconName: '',
+            SourceConnectionHash: '',
+            SourceEntity: '',
+            TargetBeaconName: '',
+            TargetConnectionHash: '',
+            TargetTable: '',
+            OperationConfiguration: SCAFFOLD_TEXT_BY_TYPE.Extraction
+          };
+          this.pict.AppData.Operation.Editing = tmpEditing;
+          this.pict.AppData.Operation.EditorError = '';
+          this.pict.AppData.Operation.View = 'edit';
+          this.render();
+        }
+        _setEditorError(pMessage) {
+          this.pict.AppData.Operation.EditorError = pMessage || '';
+          this.render();
+        }
+
+        // ── Slot population (the bridge from state to template) ──────────
+
+        _populateSlots() {
+          let tmpData = this.pict.AppData.Operation;
+          let tmpView = tmpData.View || 'list';
+          let tmpMode = tmpData.Mode || 'manage';
+          let tmpShowToolbar = !!tmpData.ShowToolbar;
+          tmpData.Scope = this._API.getScope();
+
+          // Toolbar: 0 or 1 element array (controls whether toolbar renders at all).
+          tmpData.ToolbarSlot = tmpShowToolbar ? [{}] : [];
+
+          // Toolbar's back link — only when not in list view.
+          tmpData.BackLinkSlot = tmpView !== 'list' ? [{}] : [];
+
+          // Toolbar's "+ New" button — only in manage mode + list view.
+          tmpData.NewButtonSlot = tmpMode === 'manage' && tmpView === 'list' ? [{}] : [];
+
+          // Body slots — exactly one of ListSlot / EditSlot is non-empty.
+          tmpData.ListSlot = tmpView === 'list' ? [{}] : [];
+          tmpData.EditSlot = tmpView === 'edit' && tmpData.Editing ? [this._buildEditorRecord(tmpData.Editing, tmpData.EditorError)] : [];
+
+          // List-state slots — exactly one of LoadingSlot / LoadErrorSlot /
+          // EmptySlot / ListBodySlot is non-empty when in list view.
+          let tmpState = tmpView === 'list' ? tmpData.LoadState || 'idle' : 'hidden';
+          tmpData.LoadingSlot = tmpState === 'loading' ? [{}] : [];
+          tmpData.LoadErrorSlot = tmpState === 'error' ? [{
+            Message: tmpData.LoadErrorMessage
+          }] : [];
+          tmpData.EmptySlot = tmpState === 'empty' ? [{
+            Message: tmpData.EmptyMessage
+          }] : [];
+          tmpData.ListBodySlot = tmpState === 'ready' ? [{}] : [];
+
+          // Filtered operations + per-row decoration.
+          if (tmpState === 'ready') {
+            tmpData.Tabs = this._buildTabs(tmpData.Operations, tmpData.CurrentTab);
+            tmpData.FilteredOperations = this._buildFilteredOperations(tmpData);
+            tmpData.FilteredEmptySlot = tmpData.FilteredOperations.length === 0 ? [{}] : [];
+          } else {
+            tmpData.Tabs = [];
+            tmpData.FilteredOperations = [];
+            tmpData.FilteredEmptySlot = [];
+          }
+        }
+        _buildTabs(pOperations, pCurrentTab) {
+          let tmpCounts = {
+            All: pOperations.length
+          };
+          for (let i = 0; i < KNOWN_TYPES.length; i++) tmpCounts[KNOWN_TYPES[i]] = 0;
+          for (let i = 0; i < pOperations.length; i++) {
+            let tmpType = pOperations[i].OperationType;
+            if (tmpType in tmpCounts) tmpCounts[tmpType]++;
+          }
+          let tmpKeys = ['All'].concat(KNOWN_TYPES);
+          let tmpResult = [];
+          for (let i = 0; i < tmpKeys.length; i++) {
+            let tmpKey = tmpKeys[i];
+            tmpResult.push({
+              Key: tmpKey,
+              Label: tmpKey,
+              Count: tmpCounts[tmpKey] || 0,
+              ActiveClass: tmpKey === pCurrentTab ? 'active' : 'inactive'
+            });
+          }
+          return tmpResult;
+        }
+        _buildFilteredOperations(pData) {
+          let tmpMode = pData.Mode || 'manage';
+          let tmpCurrentTab = pData.CurrentTab || 'All';
+          let tmpResult = [];
+          for (let i = 0; i < pData.Operations.length; i++) {
+            let tmpOp = pData.Operations[i];
+            if (tmpCurrentTab !== 'All' && tmpOp.OperationType !== tmpCurrentTab) continue;
+            tmpResult.push(this._decorateOperation(tmpOp, tmpMode, pData.RunResults));
+          }
+          return tmpResult;
+        }
+        _decorateOperation(pOp, pMode, pRunResults) {
+          let tmpID = pOp.IDOperationConfig;
+          let tmpRunResult = pRunResults && pRunResults[tmpID] ? pRunResults[tmpID] : null;
+          return Object.assign({}, pOp, {
+            NameOrUnnamed: pOp.Name || '(unnamed)',
+            OperationTypeLower: String(pOp.OperationType || '').toLowerCase(),
+            SourceLabel: (pOp.SourceBeaconName || '?') + '/' + (pOp.SourceEntity || '?'),
+            TargetLabel: (pOp.TargetBeaconName || '?') + '/' + (pOp.TargetTable || '?'),
+            ScopeBadgeSlot: pOp.Scope ? [{
+              Scope: pOp.Scope
+            }] : [],
+            ActionsSlot: pMode === 'manage' ? this._buildRowActions(tmpID, tmpRunResult) : [],
+            ResultSlot: tmpRunResult ? [this._buildRunResultRecord(tmpRunResult)] : []
+          });
+        }
+        _buildRowActions(pID, pRunResult) {
+          let tmpRunning = pRunResult && pRunResult.Status === 'Running';
+          return [{
+            IDOperationConfig: pID,
+            Method: 'runOperation',
+            Label: tmpRunning ? 'Running…' : '▶ Run',
+            ButtonClass: tmpRunning ? 'pso-btn-success pso-btn-disabled' : 'pso-btn-success'
+          }, {
+            IDOperationConfig: pID,
+            Method: 'openEditor',
+            Label: 'Edit',
+            ButtonClass: ''
+          }, {
+            IDOperationConfig: pID,
+            Method: 'deleteOperation',
+            Label: 'Delete',
+            ButtonClass: 'pso-btn-danger'
+          }];
+        }
+        _buildRunResultRecord(pRunResult) {
+          let tmpStatus = pRunResult.Status || 'Success';
+          let tmpStats = [];
+          if (tmpStatus === 'Success' || !pRunResult.Error && tmpStatus !== 'Error') {
+            for (let i = 0; i < RUN_STAT_FIELDS.length; i++) {
+              let tmpKey = RUN_STAT_FIELDS[i];
+              if (pRunResult[tmpKey] === undefined || pRunResult[tmpKey] === null) continue;
+              tmpStats.push({
+                Label: tmpKey,
+                Value: String(pRunResult[tmpKey])
+              });
+            }
+          }
+          let tmpHash = pRunResult.Hash || '(operation)';
+          let tmpTitle = tmpStatus === 'Error' ? '✗  ' + tmpHash + ' — failed' : tmpStatus === 'Running' ? '… ' + tmpHash + ' — running' : '✓  ' + tmpHash + ' — completed';
+          let tmpStatusClass = tmpStatus === 'Error' ? 'pso-run-error' : tmpStatus === 'Running' ? 'pso-run-running' : 'pso-run-success';
+          let tmpErrorSlot = tmpStatus === 'Error' && pRunResult.Error ? [{
+            Message: pRunResult.Error
+          }] : [];
+          return {
+            Title: tmpTitle,
+            StatusClass: tmpStatusClass,
+            Stats: tmpStats,
+            ErrorSlot: tmpErrorSlot
+          };
+        }
+        _buildEditorRecord(pEditing, pErrorMessage) {
+          let tmpIsNew = !pEditing.IDOperationConfig;
+          let tmpType = pEditing.OperationType || 'Extraction';
+          let tmpTypeOptions = [];
+          for (let i = 0; i < KNOWN_TYPES.length; i++) {
+            let tmpKey = KNOWN_TYPES[i];
+            tmpTypeOptions.push({
+              Value: tmpKey,
+              Label: tmpKey,
+              SelectedAttr: tmpKey === tmpType ? 'selected' : ''
+            });
+          }
+          let tmpSourceFields = SOURCE_EDITOR_FIELDS.map(f => ({
+            Field: f.Field,
+            Label: f.Label,
+            Value: pEditing[f.Field] || ''
+          }));
+          let tmpTargetFields = TARGET_EDITOR_FIELDS.map(f => ({
+            Field: f.Field,
+            Label: f.Label,
+            Value: pEditing[f.Field] || ''
+          }));
+          return {
+            HeaderTitle: tmpIsNew ? 'New operation' : 'Edit operation "' + pEditing.Hash + '"',
+            Hash: pEditing.Hash || '',
+            HashDisabledAttr: tmpIsNew ? '' : 'disabled',
+            Scope: pEditing.Scope || '',
+            Name: pEditing.Name || '',
+            Description: pEditing.Description || '',
+            OperationType: tmpType,
+            TypeOptions: tmpTypeOptions,
+            SourceFields: tmpSourceFields,
+            TargetFields: tmpTargetFields,
+            OperationConfiguration: pEditing.OperationConfiguration || '',
+            TypeHelp: TYPE_HELP[tmpType] || '',
+            SaveButtonLabel: tmpIsNew ? 'Create operation' : 'Save changes',
+            ErrorSlot: pErrorMessage ? [{
+              Message: pErrorMessage
+            }] : []
+          };
+        }
+
+        // ── Modal access (pict-section-modal — never native popups) ──────
+
+        _modal() {
+          // Section is registered as 'Pict-Section-Modal' (per CLAUDE.md examples).
+          // Hosts that haven't mounted a modal section degrade gracefully —
+          // inline confirms become "auto-confirmed", toasts log to console.
+          // Native window.confirm/alert/prompt are NEVER used.
+          if (!this.pict || !this.pict.views) return null;
+          return this.pict.views['Pict-Section-Modal'] || this.pict.views.Modal || null;
+        }
+        _confirm(pMessage, pOptions) {
+          let tmpModal = this._modal();
+          if (tmpModal && typeof tmpModal.confirm === 'function') {
+            return tmpModal.confirm(pMessage, pOptions);
+          }
+          // Without a modal section, log the prompt and auto-confirm. The host
+          // has chosen not to mount a modal; the alternative (blocking
+          // window.confirm) is forbidden by CLAUDE.md.
+          this.log.warn('Pict-Section-Operation: pict-section-modal not present; auto-confirming "' + pMessage + '"');
+          return Promise.resolve(true);
+        }
+        _toast(pMessage, pType) {
+          let tmpModal = this._modal();
+          if (tmpModal && typeof tmpModal.toast === 'function') {
+            tmpModal.toast(pMessage, {
+              type: pType || 'info'
+            });
+            return;
+          }
+          this.log.info('[pict-section-operation] ' + pMessage);
+        }
+      }
+      module.exports = PictSectionOperation;
+      module.exports.default_configuration = libDefaultConf;
+      module.exports.APIProvider = libAPIProvider;
+      module.exports.KNOWN_TYPES = KNOWN_TYPES;
+      module.exports.DEFAULT_CONF_BY_TYPE = DEFAULT_CONF_BY_TYPE;
+      module.exports.TYPE_HELP = TYPE_HELP;
+    }, {
+      "./Pict-Section-Operation-CSS.js": 16,
+      "./Pict-Section-Operation-DefaultConfiguration.js": 17,
+      "./providers/PictProvider-Operation-API.js": 19,
+      "pict-view": 41
+    }],
+    19: [function (require, module, exports) {
+      /**
+       * Pict-Section-Operation API Provider
+       *
+       * Thin REST client over the data-mapper /mapper/operation* surface.
+       * Centralizes scope handling: reads from localStorage by default
+       * (key shared with pict-section-mapping and pict-section-dashboard),
+       * can be overridden per section via constructor option, or per call.
+       *
+       * Bearer-token write gate: when a `WriteToken` is provided (matching
+       * the data-mapper's DATA_MAPPER_WRITE_TOKEN env), the provider
+       * injects `Authorization: Bearer <token>` on POST/PUT/DELETE.
+       * GET stays open per the data-mapper's gate convention.
+       */
+      'use strict';
+
+      const SCOPE_STORAGE_KEY = 'retold.dataMapper.activeScope';
+      class OperationAPIProvider {
+        constructor(pOptions) {
+          let tmpOptions = pOptions || {};
+          this._apiBaseUrl = tmpOptions.APIBaseUrl || '/mapper';
+          this._scopeOverride = typeof tmpOptions.Scope === 'string' ? tmpOptions.Scope : null;
+          this._writeToken = typeof tmpOptions.WriteToken === 'string' && tmpOptions.WriteToken.length > 0 ? tmpOptions.WriteToken : null;
+        }
+        getScope(pCallScope) {
+          if (typeof pCallScope === 'string') return pCallScope;
+          if (typeof this._scopeOverride === 'string') return this._scopeOverride;
+          // localStorage access can throw "SecurityError: localStorage is not
+          // available for opaque origins" in some sandbox/test environments,
+          // so guard with try/catch rather than just `typeof !== 'undefined'`.
+          try {
+            if (typeof localStorage !== 'undefined') {
+              let tmpStored = localStorage.getItem(SCOPE_STORAGE_KEY);
+              if (tmpStored !== null) return tmpStored;
+            }
+          } catch (pErr) {/* opaque origin or disabled storage — fall through */}
+          return '';
+        }
+        setScope(pScope) {
+          try {
+            if (typeof localStorage !== 'undefined') {
+              if (pScope) localStorage.setItem(SCOPE_STORAGE_KEY, pScope);else localStorage.removeItem(SCOPE_STORAGE_KEY);
+            }
+          } catch (pErr) {/* opaque origin or disabled storage — keep in-memory only */}
+          this._scopeOverride = typeof pScope === 'string' ? pScope : null;
+        }
+        setWriteToken(pToken) {
+          this._writeToken = typeof pToken === 'string' && pToken.length > 0 ? pToken : null;
+        }
+        _fetch(pMethod, pPath, pBody) {
+          let tmpOpts = {
+            method: pMethod,
+            headers: {}
+          };
+          let tmpIsWrite = pMethod !== 'GET' && pMethod !== 'HEAD';
+          if (pBody !== undefined && pBody !== null) {
+            tmpOpts.headers['Content-Type'] = 'application/json';
+            tmpOpts.body = JSON.stringify(pBody);
+          }
+          // Bearer-token injection on writes when configured. Server's
+          // DATA_MAPPER_WRITE_TOKEN gate (Phase 2b hardening) requires
+          // `Authorization: Bearer <token>` on every non-GET to /mapper/*.
+          if (tmpIsWrite && this._writeToken) {
+            tmpOpts.headers['Authorization'] = 'Bearer ' + this._writeToken;
+          }
+          return fetch(this._apiBaseUrl + pPath, tmpOpts).then(pRes => {
+            if (!pRes.ok) {
+              return pRes.text().then(pText => {
+                let tmpMsg = pText && pText.length < 400 ? pText : 'HTTP ' + pRes.status;
+                throw new Error(tmpMsg);
+              });
+            }
+            let tmpCT = pRes.headers.get('content-type') || '';
+            if (tmpCT.indexOf('application/json') === 0) return pRes.json();
+            return pRes.text();
+          });
+        }
+        _scopeQuery(pScope) {
+          let tmpScope = this.getScope(pScope);
+          if (tmpScope === '') return '';
+          return '?scope=' + encodeURIComponent(tmpScope);
+        }
+        listOperations(pScope) {
+          return this._fetch('GET', '/operations' + this._scopeQuery(pScope));
+        }
+        getOperation(pHash, pScope) {
+          return this._fetch('GET', '/operation/' + encodeURIComponent(pHash) + this._scopeQuery(pScope));
+        }
+        saveOperation(pRecord, pScope) {
+          let tmpRecord = Object.assign({}, pRecord);
+          if (tmpRecord.Scope === undefined) tmpRecord.Scope = this.getScope(pScope);
+          if (tmpRecord.IDOperationConfig) {
+            let tmpID = tmpRecord.IDOperationConfig;
+            delete tmpRecord.IDOperationConfig;
+            return this._fetch('PUT', '/operation/' + tmpID, tmpRecord);
+          }
+          return this._fetch('POST', '/operations', tmpRecord);
+        }
+        deleteOperation(pID) {
+          return this._fetch('DELETE', '/operation/' + pID);
+        }
+
+        // Run goes through UV — server route is /mapper/uv/run-operation/:id
+        // (Phase 2b). The previous implementation pointed at /operation/:id/run
+        // which never existed, so runs always returned a 404.
+        runOperation(pID) {
+          return this._fetch('POST', '/uv/run-operation/' + pID, {});
+        }
+
+        // Lake-sample peek — same surface used by the dashboard panel data
+        // fetch. Renders five rows from a beacon/connection/table tuple so the
+        // section can show a "what does this target table look like?" preview.
+        peekTable(pBeaconName, pConnectionHash, pEntity, pPageSize, pPage) {
+          return this._fetch('POST', '/dashboard/panel-data', {
+            BeaconName: pBeaconName,
+            ConnectionName: pConnectionHash,
+            Endpoint: pEntity,
+            PageSize: pPageSize || 5,
+            Page: pPage || 0
+          });
+        }
+      }
+      module.exports = OperationAPIProvider;
+      module.exports.SCOPE_STORAGE_KEY = SCOPE_STORAGE_KEY;
+    }, {}],
+    20: [function (require, module, exports) {
       /**
        * DataMapper BeaconBrowser View
        *
@@ -2763,9 +4303,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictViewMapperBeaconBrowser;
       module.exports.default_configuration = _ViewConfiguration;
     }, {
-      "pict-view": 32
+      "pict-view": 41
     }],
-    15: [function (require, module, exports) {
+    21: [function (require, module, exports) {
       /**
        * DataMapper FieldMapper View
        *
@@ -2949,9 +4489,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictViewMapperFieldMapper;
       module.exports.default_configuration = _ViewConfiguration;
     }, {
-      "pict-view": 32
+      "pict-view": 41
     }],
-    16: [function (require, module, exports) {
+    22: [function (require, module, exports) {
       /**
        * DataMapper JSONEditor View
        *
@@ -3076,9 +4616,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictViewMapperJSONEditor;
       module.exports.default_configuration = _ViewConfiguration;
     }, {
-      "pict-view": 32
+      "pict-view": 41
     }],
-    17: [function (require, module, exports) {
+    23: [function (require, module, exports) {
       /**
        * DataMapper Layout View
        *
@@ -3252,9 +4792,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictViewMapperLayout;
       module.exports.default_configuration = _ViewConfiguration;
     }, {
-      "pict-view": 32
+      "pict-view": 41
     }],
-    18: [function (require, module, exports) {
+    24: [function (require, module, exports) {
       /**
        * DataMapper MappingList View
        *
@@ -3358,9 +4898,1048 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictViewMapperMappingList;
       module.exports.default_configuration = _ViewConfiguration;
     }, {
-      "pict-view": 32
+      "pict-view": 41
     }],
-    19: [function (require, module, exports) {
+    25: [function (require, module, exports) {
+      /**
+       * Retold DataMapper — Connection Discovery View (Phase 4)
+       *
+       * Single-page customer-beacon → lake clone wizard. Lives inside
+       * retold-data-mapper (NOT a new pict-section-* module) per the
+       * "no new pict-section-* modules" constraint for mapper-private views.
+       *
+       * Three things drive the view:
+       *
+       *   1. **Source side**  — pick a beacon visible in the UV mesh, then a
+       *      connection on that beacon. Beacons come from `/mapper/beacons`,
+       *      connections from `/mapper/beacon/:name/connections`.
+       *   2. **Tables**       — Introspect the source connection; the response
+       *      lists tables. The user picks a subset.
+       *   3. **Target side**  — pick a beacon + connection to clone INTO
+       *      (defaults to lake-databeacon / lake-main). Then "Create N
+       *      operations" loops through the selected tables and POSTs an
+       *      Extraction OperationConfig for each (Pull-from-source →
+       *      Write-to-target with the table preserved).
+       *
+       * The created operations show up immediately in the Operations tab,
+       * where the user can run them individually or via the "Run all in
+       * dependency order" button on the section.
+       *
+       * State lives in pict.AppData.MapperShell.Connections.* — slot pattern
+       * mirrors the section refactors so the template engine drives all
+       * visibility/conditional rendering.
+       */
+      'use strict';
+
+      const libPictView = require('pict-view');
+
+      // ── Templates ──────────────────────────────────────────────────────
+
+      const SHELL_TEMPLATE = /*html*/`
+<div class="msh-cd-root">
+	<div class="msh-cd-header">
+		<h2>Connection Discovery</h2>
+		<p>Discover customer beacons in the UV mesh, introspect their tables, and bulk-create Pull→Write operations into the lake. The operations land in the Operations tab where you can run them individually or in dependency order.</p>
+	</div>
+
+	{~TS:MapperShell-Connections-LoadingBeacons:AppData.MapperShell.Connections.LoadingBeaconsSlot~}
+	{~TS:MapperShell-Connections-LoadError:AppData.MapperShell.Connections.LoadErrorSlot~}
+
+	<div class="msh-cd-grid">
+		<div class="msh-cd-card msh-cd-source">
+			<h3>1. Source</h3>
+			<label>Beacon
+				<select onchange="_Pict.views['MapperShell-Connections'].selectSourceBeacon(this.value)">
+					<option value="">— pick a beacon —</option>
+					{~TS:MapperShell-Connections-BeaconOption:AppData.MapperShell.Connections.SourceBeaconOptions~}
+				</select>
+			</label>
+			<label>Connection
+				<select onchange="_Pict.views['MapperShell-Connections'].selectSourceConnection(this.value)">
+					<option value="">— pick a connection —</option>
+					{~TS:MapperShell-Connections-ConnectionOption:AppData.MapperShell.Connections.SourceConnectionOptions~}
+				</select>
+			</label>
+			<a class="msh-cd-btn msh-cd-btn-primary {~Data:AppData.MapperShell.Connections.IntrospectDisabled~}" href="javascript:void(0)"
+				onclick="_Pict.views['MapperShell-Connections'].runIntrospect()">{~Data:AppData.MapperShell.Connections.IntrospectLabel~}</a>
+		</div>
+
+		<div class="msh-cd-card msh-cd-target">
+			<h3>2. Target</h3>
+			<label>Beacon
+				<select onchange="_Pict.views['MapperShell-Connections'].selectTargetBeacon(this.value)">
+					{~TS:MapperShell-Connections-BeaconOption:AppData.MapperShell.Connections.TargetBeaconOptions~}
+				</select>
+			</label>
+			<label>Connection
+				<select onchange="_Pict.views['MapperShell-Connections'].selectTargetConnection(this.value)">
+					<option value="">— pick a connection —</option>
+					{~TS:MapperShell-Connections-ConnectionOption:AppData.MapperShell.Connections.TargetConnectionOptions~}
+				</select>
+			</label>
+			<div class="msh-cd-target-hint">Operations are created as Extractions (pass-through clone). Edit afterwards in the Operations tab if you need filters or column projections.</div>
+		</div>
+	</div>
+
+	{~TS:MapperShell-Connections-Introspecting:AppData.MapperShell.Connections.IntrospectingSlot~}
+	{~TS:MapperShell-Connections-IntrospectError:AppData.MapperShell.Connections.IntrospectErrorSlot~}
+
+	<div class="msh-cd-tables-wrap">
+		{~TS:MapperShell-Connections-TablesPanel:AppData.MapperShell.Connections.TablesPanelSlot~}
+	</div>
+
+	{~TS:MapperShell-Connections-Results:AppData.MapperShell.Connections.ResultsSlot~}
+</div>`;
+      const BEACON_OPTION_TEMPLATE = /*html*/`
+<option value="{~Data:Record.Name~}" {~Data:Record.SelectedAttr~}>{~Data:Record.Name~}</option>`;
+      const CONNECTION_OPTION_TEMPLATE = /*html*/`
+<option value="{~Data:Record.Name~}" {~Data:Record.SelectedAttr~}>{~Data:Record.Label~}</option>`;
+      const LOADING_BEACONS_TEMPLATE = /*html*/`
+<div class="msh-cd-status">Loading beacons from UV mesh…</div>`;
+      const LOAD_ERROR_TEMPLATE = /*html*/`
+<div class="msh-cd-error">Failed to list beacons: {~Data:Record.Message~}</div>`;
+      const INTROSPECTING_TEMPLATE = /*html*/`
+<div class="msh-cd-status">Introspecting <code>{~Data:Record.Beacon~}</code> / <code>{~Data:Record.Connection~}</code>…</div>`;
+      const INTROSPECT_ERROR_TEMPLATE = /*html*/`
+<div class="msh-cd-error">Introspect failed: {~Data:Record.Message~}</div>`;
+      const TABLES_PANEL_TEMPLATE = /*html*/`
+<div class="msh-cd-tables">
+	<div class="msh-cd-tables-header">
+		<h3>3. Tables to clone <span class="msh-cd-count">({~Data:Record.SelectedCount~} of {~Data:Record.TotalCount~} selected)</span></h3>
+		<div class="msh-cd-tables-actions">
+			<a class="msh-cd-btn msh-cd-btn-link" href="javascript:void(0)"
+				onclick="_Pict.views['MapperShell-Connections'].selectAllTables(true)">Select all</a>
+			<a class="msh-cd-btn msh-cd-btn-link" href="javascript:void(0)"
+				onclick="_Pict.views['MapperShell-Connections'].selectAllTables(false)">Select none</a>
+		</div>
+	</div>
+	<div class="msh-cd-tables-list">
+		{~TS:MapperShell-Connections-TableRow:Record.Tables~}
+	</div>
+	<div class="msh-cd-tables-footer">
+		<a class="msh-cd-btn msh-cd-btn-success {~Data:Record.CreateDisabled~}" href="javascript:void(0)"
+			onclick="_Pict.views['MapperShell-Connections'].runCloneAll()">{~Data:Record.CreateLabel~}</a>
+	</div>
+</div>`;
+      const TABLE_ROW_TEMPLATE = /*html*/`
+<label class="msh-cd-table-row">
+	<input type="checkbox" {~Data:Record.CheckedAttr~}
+		onchange="_Pict.views['MapperShell-Connections'].toggleTable('{~Data:Record.TableName~}', this.checked)" />
+	<span class="msh-cd-table-name">{~Data:Record.TableName~}</span>
+	<span class="msh-cd-table-meta">{~Data:Record.ColumnCountLabel~}</span>
+</label>`;
+      const RESULTS_PANEL_TEMPLATE = /*html*/`
+<div class="msh-cd-results msh-cd-results-{~Data:Record.OverallStatusClass~}">
+	<h3>{~Data:Record.HeaderLabel~}</h3>
+	{~TS:MapperShell-Connections-ResultRow:Record.Items~}
+	<div class="msh-cd-results-footer">
+		<a class="msh-cd-btn" href="javascript:void(0)"
+			onclick="_Pict.views['MapperShell-Connections'].dismissResults()">Dismiss</a>
+		<a class="msh-cd-btn msh-cd-btn-primary" href="javascript:void(0)"
+			onclick="_Pict.PictApplication.selectTab('operations')">Open Operations tab →</a>
+	</div>
+</div>`;
+      const RESULT_ROW_TEMPLATE = /*html*/`
+<div class="msh-cd-result-row msh-cd-result-{~Data:Record.StatusClass~}">
+	<span class="msh-cd-result-icon">{~Data:Record.Icon~}</span>
+	<span class="msh-cd-result-table">{~Data:Record.TableName~}</span>
+	<span class="msh-cd-result-message">{~Data:Record.Message~}</span>
+</div>`;
+
+      // ── CSS ────────────────────────────────────────────────────────────
+
+      const CSS = /*css*/`
+.msh-cd-root
+{
+	padding: 24px 32px;
+	max-width: 1100px;
+	margin: 0 auto;
+	color: #cbd5e1;
+}
+.msh-cd-header h2 { color: #f8fafc; font-size: 20px; margin: 0 0 6px 0; }
+.msh-cd-header p { font-size: 13px; line-height: 1.6; margin: 0 0 24px 0; color: #94a3b8; }
+
+.msh-cd-grid
+{
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 16px;
+	margin-bottom: 18px;
+}
+.msh-cd-card
+{
+	background: #0a1525;
+	border: 1px solid #1e293b;
+	border-radius: 8px;
+	padding: 18px 20px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.msh-cd-card h3 { margin: 0 0 4px 0; font-size: 14px; color: #f8fafc; font-weight: 600; }
+.msh-cd-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #94a3b8; }
+.msh-cd-card select
+{
+	background: #0e1a2b;
+	color: #f8fafc;
+	border: 1px solid #1e293b;
+	padding: 7px 10px;
+	border-radius: 4px;
+	font-size: 12px;
+	font-family: inherit;
+}
+.msh-cd-target-hint { color: #64748b; font-size: 11px; font-style: italic; line-height: 1.5; margin-top: auto; }
+
+.msh-cd-btn
+{
+	background: #16213e;
+	color: #cbd5e1;
+	border: 1px solid #1e293b;
+	padding: 7px 14px;
+	border-radius: 4px;
+	font-size: 12px;
+	cursor: pointer;
+	text-decoration: none;
+	display: inline-block;
+	text-align: center;
+}
+.msh-cd-btn:hover { background: #1e293b; color: #f8fafc; }
+.msh-cd-btn.msh-cd-btn-primary { background: #1d4ed8; color: #fff; border-color: #1d4ed8; align-self: flex-start; }
+.msh-cd-btn.msh-cd-btn-primary:hover { background: #1e40af; }
+.msh-cd-btn.msh-cd-btn-success { background: #15803d; color: #dcfce7; border-color: #166534; }
+.msh-cd-btn.msh-cd-btn-success:hover { background: #166534; }
+.msh-cd-btn.msh-cd-btn-link { background: transparent; border: 0; color: #93c5fd; padding: 4px 8px; }
+.msh-cd-btn.msh-cd-btn-link:hover { color: #bfdbfe; background: transparent; }
+.msh-cd-btn.msh-cd-btn-disabled { opacity: 0.4; pointer-events: none; }
+
+.msh-cd-status
+{
+	padding: 10px 14px;
+	background: #0f172a;
+	border: 1px solid #1e293b;
+	border-radius: 4px;
+	color: #94a3b8;
+	font-size: 12px;
+	margin-bottom: 12px;
+}
+.msh-cd-status code { color: #93c5fd; background: transparent; font-family: monospace; }
+.msh-cd-error
+{
+	padding: 12px 14px;
+	background: #2a1010;
+	color: #fecaca;
+	border: 1px solid #b91c1c;
+	border-radius: 4px;
+	font-size: 12px;
+	margin-bottom: 12px;
+}
+
+.msh-cd-tables
+{
+	background: #0a1525;
+	border: 1px solid #1e293b;
+	border-radius: 8px;
+	padding: 18px 20px;
+}
+.msh-cd-tables-header
+{
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 12px;
+	flex-wrap: wrap;
+}
+.msh-cd-tables-header h3 { margin: 0; font-size: 14px; color: #f8fafc; font-weight: 600; }
+.msh-cd-tables-header .msh-cd-count { color: #94a3b8; font-weight: 400; font-size: 12px; margin-left: 8px; }
+.msh-cd-tables-actions { display: flex; gap: 4px; }
+.msh-cd-tables-list
+{
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+	gap: 4px 16px;
+	padding: 8px 0;
+	border-top: 1px solid #1e293b;
+	border-bottom: 1px solid #1e293b;
+	max-height: 360px;
+	overflow-y: auto;
+}
+.msh-cd-table-row
+{
+	display: grid;
+	grid-template-columns: 18px 1fr auto;
+	align-items: center;
+	gap: 8px;
+	padding: 5px 8px;
+	border-radius: 3px;
+	cursor: pointer;
+	font-size: 12px;
+}
+.msh-cd-table-row:hover { background: #16213e; }
+.msh-cd-table-row .msh-cd-table-name { color: #f8fafc; font-family: monospace; }
+.msh-cd-table-row .msh-cd-table-meta { color: #64748b; font-size: 11px; }
+.msh-cd-tables-footer { padding-top: 14px; display: flex; justify-content: flex-end; }
+
+.msh-cd-results
+{
+	margin-top: 18px;
+	background: #0a1525;
+	border: 1px solid #1e293b;
+	border-radius: 8px;
+	padding: 18px 20px;
+}
+.msh-cd-results.msh-cd-results-success { border-color: #15803d; }
+.msh-cd-results.msh-cd-results-partial { border-color: #f59e0b; }
+.msh-cd-results.msh-cd-results-error   { border-color: #b91c1c; }
+.msh-cd-results h3 { margin: 0 0 12px 0; color: #f8fafc; font-size: 14px; }
+.msh-cd-result-row
+{
+	display: grid;
+	grid-template-columns: 24px 220px 1fr;
+	gap: 10px;
+	padding: 6px 4px;
+	font-size: 12px;
+	border-bottom: 1px solid #1e293b;
+}
+.msh-cd-result-row:last-child { border-bottom: 0; }
+.msh-cd-result-row .msh-cd-result-icon { font-weight: 600; }
+.msh-cd-result-row .msh-cd-result-table { font-family: monospace; color: #f8fafc; }
+.msh-cd-result-row .msh-cd-result-message { color: #94a3b8; }
+.msh-cd-result-row.msh-cd-result-success .msh-cd-result-icon { color: #4ade80; }
+.msh-cd-result-row.msh-cd-result-error   .msh-cd-result-icon { color: #f87171; }
+.msh-cd-result-row.msh-cd-result-error   .msh-cd-result-message { color: #fecaca; }
+.msh-cd-results-footer { display: flex; gap: 8px; justify-content: flex-end; padding-top: 12px; margin-top: 12px; border-top: 1px solid #1e293b; }
+`;
+
+      // ── Configuration ──────────────────────────────────────────────────
+
+      const _Configuration = {
+        ViewIdentifier: 'MapperShell-Connections',
+        DefaultRenderable: 'MapperShell-Connections-Renderable',
+        DefaultDestinationAddress: '#MapperShell-Connections',
+        DefaultTemplateRecordAddress: 'AppData.MapperShell.Connections',
+        AutoRender: false,
+        RenderOnLoad: false,
+        CSS: CSS,
+        CSSPriority: 500,
+        Templates: [{
+          Hash: 'MapperShell-Connections-Shell',
+          Template: SHELL_TEMPLATE
+        }, {
+          Hash: 'MapperShell-Connections-BeaconOption',
+          Template: BEACON_OPTION_TEMPLATE
+        }, {
+          Hash: 'MapperShell-Connections-ConnectionOption',
+          Template: CONNECTION_OPTION_TEMPLATE
+        }, {
+          Hash: 'MapperShell-Connections-LoadingBeacons',
+          Template: LOADING_BEACONS_TEMPLATE
+        }, {
+          Hash: 'MapperShell-Connections-LoadError',
+          Template: LOAD_ERROR_TEMPLATE
+        }, {
+          Hash: 'MapperShell-Connections-Introspecting',
+          Template: INTROSPECTING_TEMPLATE
+        }, {
+          Hash: 'MapperShell-Connections-IntrospectError',
+          Template: INTROSPECT_ERROR_TEMPLATE
+        }, {
+          Hash: 'MapperShell-Connections-TablesPanel',
+          Template: TABLES_PANEL_TEMPLATE
+        }, {
+          Hash: 'MapperShell-Connections-TableRow',
+          Template: TABLE_ROW_TEMPLATE
+        }, {
+          Hash: 'MapperShell-Connections-Results',
+          Template: RESULTS_PANEL_TEMPLATE
+        }, {
+          Hash: 'MapperShell-Connections-ResultRow',
+          Template: RESULT_ROW_TEMPLATE
+        }],
+        Renderables: [{
+          RenderableHash: 'MapperShell-Connections-Renderable',
+          TemplateHash: 'MapperShell-Connections-Shell',
+          TemplateRecordAddress: 'AppData.MapperShell.Connections',
+          DestinationAddress: '#MapperShell-Connections',
+          RenderMethod: 'replace'
+        }]
+      };
+
+      // ── View class ─────────────────────────────────────────────────────
+
+      class MapperShellConnectionsView extends libPictView {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+          this._seedAppData();
+          this._beaconsLoaded = false;
+        }
+        _seedAppData() {
+          if (!this.pict.AppData) this.pict.AppData = {};
+          if (!this.pict.AppData.MapperShell) this.pict.AppData.MapperShell = {};
+          this.pict.AppData.MapperShell.Connections = {
+            Beacons: [],
+            LoadState: 'idle',
+            // 'idle' | 'loading' | 'ready' | 'error'
+            LoadErrorMessage: '',
+            SourceBeaconName: '',
+            SourceConnections: [],
+            SourceConnection: null,
+            // selected connection record
+
+            TargetBeaconName: 'lake-databeacon',
+            TargetConnections: [],
+            TargetConnection: null,
+            TargetConnectionName: 'lake-main',
+            IntrospectState: 'idle',
+            // 'idle' | 'loading' | 'ready' | 'error'
+            IntrospectErrorMessage: '',
+            TablesAvailable: [],
+            // [{ TableName, Columns: [...] }]
+            SelectedTables: {},
+            // { tableName: true }
+
+            CreateState: 'idle',
+            // 'idle' | 'creating' | 'done'
+            CreateResults: [],
+            // [{ TableName, Status, Message }]
+
+            // Slots (computed in onBeforeRender):
+            SourceBeaconOptions: [],
+            SourceConnectionOptions: [],
+            TargetBeaconOptions: [],
+            TargetConnectionOptions: [],
+            LoadingBeaconsSlot: [],
+            LoadErrorSlot: [],
+            IntrospectingSlot: [],
+            IntrospectErrorSlot: [],
+            TablesPanelSlot: [],
+            ResultsSlot: [],
+            IntrospectDisabled: 'msh-cd-btn-disabled',
+            IntrospectLabel: 'Introspect →'
+          };
+        }
+
+        // ── Lifecycle ────────────────────────────────────────────────────
+
+        onBeforeRender(pRenderable, pAddress, pRecord, pContent) {
+          this._populateSlots();
+          return super.onBeforeRender(pRenderable, pAddress, pRecord, pContent);
+        }
+        onAfterRender(pRenderable, pAddress, pRecord, pContent) {
+          this.pict.CSSMap.injectCSS();
+          // Lazy-load the beacon list on first render. Subsequent renders
+          // reuse the cached list. Refresh is implicit on tab-leave/return.
+          if (!this._beaconsLoaded) {
+            this._beaconsLoaded = true;
+            this._loadBeacons();
+          }
+          return super.onAfterRender(pRenderable, pAddress, pRecord, pContent);
+        }
+
+        // ── Public API (called from inline template handlers) ───────────
+
+        selectSourceBeacon(pName) {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+          tmpData.SourceBeaconName = String(pName || '');
+          tmpData.SourceConnections = [];
+          tmpData.SourceConnection = null;
+          tmpData.IntrospectState = 'idle';
+          tmpData.TablesAvailable = [];
+          tmpData.SelectedTables = {};
+          tmpData.CreateState = 'idle';
+          tmpData.CreateResults = [];
+          this.render();
+          if (tmpData.SourceBeaconName) this._loadConnections(tmpData.SourceBeaconName, 'source');
+        }
+        selectSourceConnection(pName) {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+          let tmpFound = tmpData.SourceConnections.find(c => c._Slug === pName || c.Name === pName);
+          tmpData.SourceConnection = tmpFound || null;
+          tmpData.IntrospectState = 'idle';
+          tmpData.TablesAvailable = [];
+          tmpData.SelectedTables = {};
+          this.render();
+        }
+        selectTargetBeacon(pName) {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+          tmpData.TargetBeaconName = String(pName || '');
+          tmpData.TargetConnections = [];
+          tmpData.TargetConnection = null;
+          tmpData.TargetConnectionName = '';
+          this.render();
+          if (tmpData.TargetBeaconName) this._loadConnections(tmpData.TargetBeaconName, 'target');
+        }
+        selectTargetConnection(pName) {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+          tmpData.TargetConnectionName = String(pName || '');
+          let tmpFound = tmpData.TargetConnections.find(c => c._Slug === pName || c.Name === pName);
+          tmpData.TargetConnection = tmpFound || null;
+          this.render();
+        }
+        runIntrospect() {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+          if (!tmpData.SourceConnection || !tmpData.SourceConnection.IDBeaconConnection) return;
+          tmpData.IntrospectState = 'loading';
+          tmpData.IntrospectErrorMessage = '';
+          tmpData.TablesAvailable = [];
+          tmpData.SelectedTables = {};
+          this.render();
+          fetch('/mapper/beacon/' + encodeURIComponent(tmpData.SourceBeaconName) + '/introspect', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              IDBeaconConnection: tmpData.SourceConnection.IDBeaconConnection
+            })
+          }).then(pRes => pRes.ok ? pRes.json() : pRes.text().then(t => Promise.reject(new Error(t)))).then(pData => {
+            tmpData.TablesAvailable = pData && pData.Tables || [];
+            // Default: all tables selected
+            tmpData.SelectedTables = {};
+            for (let i = 0; i < tmpData.TablesAvailable.length; i++) {
+              let tmpName = tmpData.TablesAvailable[i].TableName || tmpData.TablesAvailable[i].Name;
+              if (tmpName) tmpData.SelectedTables[tmpName] = true;
+            }
+            tmpData.IntrospectState = 'ready';
+            this.render();
+          }).catch(pErr => {
+            tmpData.IntrospectState = 'error';
+            tmpData.IntrospectErrorMessage = pErr.message || String(pErr);
+            this.render();
+          });
+        }
+        toggleTable(pTableName, pChecked) {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+          if (pChecked) tmpData.SelectedTables[pTableName] = true;else delete tmpData.SelectedTables[pTableName];
+          this.render();
+        }
+        selectAllTables(pChecked) {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+          tmpData.SelectedTables = {};
+          if (pChecked) {
+            for (let i = 0; i < tmpData.TablesAvailable.length; i++) {
+              let tmpName = tmpData.TablesAvailable[i].TableName || tmpData.TablesAvailable[i].Name;
+              if (tmpName) tmpData.SelectedTables[tmpName] = true;
+            }
+          }
+          this.render();
+        }
+        runCloneAll() {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+          let tmpSelected = Object.keys(tmpData.SelectedTables).filter(k => tmpData.SelectedTables[k]);
+          if (tmpSelected.length === 0) return;
+          if (!tmpData.SourceConnection || !tmpData.TargetConnection) return;
+          tmpData.CreateState = 'creating';
+          tmpData.CreateResults = [];
+          this.render();
+
+          // Process serially so a failed creation doesn't race with later
+          // ones that depend on a stable IDOperationConfig allocation.
+          // Clone-of-table is small (one HTTP call each), so serial is fine.
+          let tmpSourceBeacon = tmpData.SourceBeaconName;
+          let tmpSourceSlug = tmpData.SourceConnection._Slug || tmpData.SourceConnection.Name;
+          let tmpTargetBeacon = tmpData.TargetBeaconName;
+          let tmpTargetSlug = tmpData.TargetConnection._Slug || tmpData.TargetConnection.Name;
+          let tmpResults = [];
+          let _self = this;
+          let _next = i => {
+            if (i >= tmpSelected.length) {
+              tmpData.CreateResults = tmpResults;
+              tmpData.CreateState = 'done';
+              _self.render();
+              return;
+            }
+            let tmpTable = tmpSelected[i];
+            let tmpTableMeta = (tmpData.TablesAvailable || []).find(t => t.TableName === tmpTable || t.Name === tmpTable);
+            let tmpHashSafe = String(tmpTable).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+            let tmpRecord = {
+              Hash: 'clone-' + tmpSourceBeacon + '-' + tmpHashSafe,
+              Name: 'Clone ' + tmpTable + ' from ' + tmpSourceBeacon,
+              Description: 'Auto-created from Connection Discovery wizard',
+              OperationType: 'Extraction',
+              SourceBeaconName: tmpSourceBeacon,
+              SourceConnectionHash: tmpSourceSlug,
+              SourceEntity: tmpTable,
+              TargetBeaconName: tmpTargetBeacon,
+              TargetConnectionHash: tmpTargetSlug,
+              TargetTable: tmpTable,
+              OperationConfiguration: this._buildExtractionConfig(tmpTable, tmpTableMeta),
+              Scope: ''
+            };
+            fetch('/mapper/operations', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(tmpRecord)
+            }).then(pRes => pRes.ok ? pRes.json() : pRes.text().then(t => Promise.reject(new Error(t)))).then(() => {
+              tmpResults.push({
+                TableName: tmpTable,
+                Status: 'success',
+                Message: 'Operation created.'
+              });
+            }).catch(pErr => {
+              tmpResults.push({
+                TableName: tmpTable,
+                Status: 'error',
+                Message: pErr.message || String(pErr)
+              });
+            }).then(() => _next(i + 1));
+          };
+          _next(0);
+        }
+        dismissResults() {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+          tmpData.CreateState = 'idle';
+          tmpData.CreateResults = [];
+          this.render();
+        }
+
+        // ── Internal ─────────────────────────────────────────────────────
+
+        _loadBeacons() {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+          tmpData.LoadState = 'loading';
+          this.render();
+          fetch('/mapper/beacons').then(pRes => pRes.ok ? pRes.json() : pRes.text().then(t => Promise.reject(new Error(t)))).then(pData => {
+            tmpData.Beacons = pData && pData.Beacons || [];
+            tmpData.LoadState = 'ready';
+            // If target defaults are set, kick off the target connection list too.
+            if (tmpData.TargetBeaconName) this._loadConnections(tmpData.TargetBeaconName, 'target');
+            this.render();
+          }).catch(pErr => {
+            tmpData.LoadState = 'error';
+            tmpData.LoadErrorMessage = pErr.message || String(pErr);
+            this.render();
+          });
+        }
+        _loadConnections(pBeaconName, pSide) {
+          fetch('/mapper/beacon/' + encodeURIComponent(pBeaconName) + '/connections').then(pRes => pRes.ok ? pRes.json() : pRes.text().then(t => Promise.reject(new Error(t)))).then(pData => {
+            let tmpData = this.pict.AppData.MapperShell.Connections;
+            let tmpConnections = (pData && pData.Connections || []).filter(c => !c.Deleted).map(c => Object.assign({}, c, {
+              _Slug: this._slug(c.Name)
+            }));
+            if (pSide === 'source') {
+              tmpData.SourceConnections = tmpConnections;
+              // Auto-pick if there's exactly one connection (common case).
+              if (tmpConnections.length === 1) {
+                tmpData.SourceConnection = tmpConnections[0];
+              }
+            } else {
+              tmpData.TargetConnections = tmpConnections;
+              // Auto-pick the saved TargetConnectionName if present in the loaded list.
+              if (tmpData.TargetConnectionName) {
+                let tmpFound = tmpConnections.find(c => c._Slug === tmpData.TargetConnectionName || c.Name === tmpData.TargetConnectionName);
+                if (tmpFound) tmpData.TargetConnection = tmpFound;
+              } else if (tmpConnections.length === 1) {
+                tmpData.TargetConnection = tmpConnections[0];
+                tmpData.TargetConnectionName = tmpConnections[0]._Slug;
+              }
+            }
+            this.render();
+          }).catch(pErr => {
+            if (this.log && this.log.warn) this.log.warn('MapperShell-Connections: list connections failed for ' + pBeaconName + ': ' + (pErr.message || pErr));
+          });
+        }
+        _slug(pName) {
+          return String(pName || '').toLowerCase().trim().replace(/\s+/g, '-');
+        }
+
+        /**
+         * Build a pass-through Extraction OperationConfiguration for a clone.
+         *
+         * Strategy:
+         *   - Entity      = target table name (we keep source naming; user
+         *                   can rename in the Operations editor afterwards).
+         *   - GUIDName    = source's AutoGUID column if present, else
+         *                   `GUID<Entity>` (Meadow convention).
+         *   - GUIDTemplate= `{~D:Record.<GUIDName>~}` — re-use the source's
+         *                   per-row GUID directly so the clone preserves
+         *                   identity across runs (Meadow's CollisionRename
+         *                   behavior handles soft-delete/re-insert cycles).
+         *   - Filter      = {} (clone everything)
+         *   - Projection  = every column 1:1, EXCLUDING the AutoIdentity PK
+         *                   (target side allocates its own).
+         *
+         * Falls back to a minimal `{ Entity, Filter, Projection: {} }` when
+         * no column metadata is available — the user can fill in the editor.
+         */
+        _buildExtractionConfig(pTableName, pTableMeta) {
+          let tmpEntity = pTableName;
+          let tmpColumns = pTableMeta && pTableMeta.Columns || [];
+
+          // Find the source's GUID column (Meadow's AutoGUID type) — used
+          // both as the clone's GUIDName (target column to write into) and
+          // the source field referenced by GUIDTemplate.
+          let tmpGuidCol = tmpColumns.find(c => c && c.MeadowType === 'AutoGUID');
+          let tmpGuidName = tmpGuidCol ? tmpGuidCol.Name : 'GUID' + tmpEntity;
+          let tmpGuidTemplate = '{~D:Record.' + tmpGuidName + '~}';
+
+          // Projection: every column except the source's AutoIdentity PK
+          // (the target meadow will allocate its own IDxxx). Includes the
+          // GUID column, audit columns, and data columns — so the clone is
+          // a faithful row-for-row mirror.
+          let tmpProjection = {};
+          for (let i = 0; i < tmpColumns.length; i++) {
+            let tmpCol = tmpColumns[i];
+            if (!tmpCol || !tmpCol.Name) continue;
+            if (tmpCol.MeadowType === 'AutoIdentity') continue;
+            tmpProjection[tmpCol.Name] = '{~D:Record.' + tmpCol.Name + '~}';
+          }
+          return {
+            Entity: tmpEntity,
+            GUIDName: tmpGuidName,
+            GUIDTemplate: tmpGuidTemplate,
+            Filter: {},
+            Projection: tmpProjection
+          };
+        }
+
+        // ── Slot population ──────────────────────────────────────────────
+
+        _populateSlots() {
+          let tmpData = this.pict.AppData.MapperShell.Connections;
+
+          // Beacon-list state slots.
+          tmpData.LoadingBeaconsSlot = tmpData.LoadState === 'loading' ? [{}] : [];
+          tmpData.LoadErrorSlot = tmpData.LoadState === 'error' ? [{
+            Message: tmpData.LoadErrorMessage
+          }] : [];
+
+          // Beacon dropdown options (source has all beacons; target excludes
+          // the currently-picked source beacon so we don't accidentally
+          // clone a beacon onto itself).
+          let tmpBeacons = tmpData.Beacons || [];
+          tmpData.SourceBeaconOptions = tmpBeacons.map(b => ({
+            Name: b.Name,
+            SelectedAttr: b.Name === tmpData.SourceBeaconName ? 'selected' : ''
+          }));
+          tmpData.TargetBeaconOptions = tmpBeacons.filter(b => b.Name !== tmpData.SourceBeaconName).map(b => ({
+            Name: b.Name,
+            SelectedAttr: b.Name === tmpData.TargetBeaconName ? 'selected' : ''
+          }));
+
+          // Connection dropdown options.
+          tmpData.SourceConnectionOptions = (tmpData.SourceConnections || []).map(c => ({
+            Name: c._Slug,
+            Label: c.Name + ' (' + (c.Type || '?') + ')',
+            SelectedAttr: tmpData.SourceConnection && c._Slug === tmpData.SourceConnection._Slug ? 'selected' : ''
+          }));
+          tmpData.TargetConnectionOptions = (tmpData.TargetConnections || []).map(c => ({
+            Name: c._Slug,
+            Label: c.Name + ' (' + (c.Type || '?') + ')',
+            SelectedAttr: tmpData.TargetConnection && c._Slug === tmpData.TargetConnection._Slug ? 'selected' : ''
+          }));
+
+          // Introspect button state.
+          let tmpCanIntrospect = !!(tmpData.SourceConnection && tmpData.SourceConnection.IDBeaconConnection);
+          tmpData.IntrospectDisabled = tmpCanIntrospect ? '' : 'msh-cd-btn-disabled';
+          tmpData.IntrospectLabel = tmpData.IntrospectState === 'loading' ? 'Introspecting…' : 'Introspect →';
+
+          // Introspect state slots.
+          tmpData.IntrospectingSlot = tmpData.IntrospectState === 'loading' ? [{
+            Beacon: tmpData.SourceBeaconName,
+            Connection: tmpData.SourceConnection ? tmpData.SourceConnection.Name || '' : ''
+          }] : [];
+          tmpData.IntrospectErrorSlot = tmpData.IntrospectState === 'error' ? [{
+            Message: tmpData.IntrospectErrorMessage
+          }] : [];
+
+          // Tables panel slot — only when introspect is ready AND we have any tables.
+          if (tmpData.IntrospectState === 'ready') {
+            tmpData.TablesPanelSlot = [this._buildTablesPanelRecord(tmpData)];
+          } else {
+            tmpData.TablesPanelSlot = [];
+          }
+
+          // Results panel slot — when CreateState is done.
+          if (tmpData.CreateState === 'done') {
+            tmpData.ResultsSlot = [this._buildResultsRecord(tmpData)];
+          } else {
+            tmpData.ResultsSlot = [];
+          }
+        }
+        _buildTablesPanelRecord(pData) {
+          let tmpRows = (pData.TablesAvailable || []).map(t => {
+            let tmpName = t.TableName || t.Name || '';
+            let tmpColCount = t.Columns && t.Columns.length || 0;
+            return {
+              TableName: tmpName,
+              ColumnCountLabel: tmpColCount + ' columns',
+              CheckedAttr: pData.SelectedTables[tmpName] ? 'checked' : ''
+            };
+          });
+          let tmpSelectedCount = Object.keys(pData.SelectedTables).filter(k => pData.SelectedTables[k]).length;
+          let tmpReady = tmpSelectedCount > 0 && !!pData.TargetConnection && !!pData.SourceConnection && pData.CreateState !== 'creating';
+          return {
+            Tables: tmpRows,
+            TotalCount: tmpRows.length,
+            SelectedCount: tmpSelectedCount,
+            CreateLabel: pData.CreateState === 'creating' ? 'Creating…' : 'Create ' + tmpSelectedCount + ' clone operation' + (tmpSelectedCount === 1 ? '' : 's'),
+            CreateDisabled: tmpReady ? '' : 'msh-cd-btn-disabled'
+          };
+        }
+        _buildResultsRecord(pData) {
+          let tmpItems = (pData.CreateResults || []).map(r => {
+            let tmpStatus = r.Status || 'success';
+            return {
+              TableName: r.TableName,
+              Message: r.Message || '',
+              Icon: tmpStatus === 'success' ? '✓' : '✗',
+              StatusClass: tmpStatus
+            };
+          });
+          let tmpFails = tmpItems.filter(r => r.StatusClass === 'error').length;
+          let tmpOverall = tmpFails === 0 ? 'success' : tmpFails === tmpItems.length ? 'error' : 'partial';
+          let tmpHeader = tmpOverall === 'success' ? '✓  Created ' + tmpItems.length + ' clone operation' + (tmpItems.length === 1 ? '' : 's') : tmpOverall === 'error' ? '✗  All ' + tmpItems.length + ' creates failed' : 'Partial — ' + (tmpItems.length - tmpFails) + ' of ' + tmpItems.length + ' succeeded';
+          return {
+            Items: tmpItems,
+            HeaderLabel: tmpHeader,
+            OverallStatusClass: tmpOverall
+          };
+        }
+      }
+      module.exports = MapperShellConnectionsView;
+      module.exports.default_configuration = _Configuration;
+    }, {
+      "pict-view": 41
+    }],
+    26: [function (require, module, exports) {
+      /**
+       * Retold DataMapper — MapperShell Layout View
+       *
+       * Main viewport for the cohesive mapper shell. Template owns the
+       * top-nav slot and the four section destination divs (one per tab);
+       * which one is visible is driven by AppData.MapperShell.ActiveTab and
+       * styled via CSS sibling selectors against `data-active-tab` on the
+       * shell root.
+       */
+      'use strict';
+
+      const libPictView = require('pict-view');
+      const LAYOUT_TEMPLATE = /*html*/`
+<div class="msh-root" data-active-tab="{~Data:AppData.MapperShell.ActiveTab~}">
+	<div id="MapperShell-TopNav"></div>
+	<div class="msh-pane msh-pane-connections" id="MapperShell-Connections"></div>
+	<div class="msh-pane msh-pane-mappings"    id="MapperShell-Mappings"></div>
+	<div class="msh-pane msh-pane-operations"  id="MapperShell-Operations"></div>
+	<div class="msh-pane msh-pane-dashboards"  id="MapperShell-Dashboards"></div>
+</div>`;
+      const SHELL_CSS = /*css*/`
+.msh-root
+{
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	background: #0e1a2b;
+	color: #f8fafc;
+	min-height: 100vh;
+	display: flex;
+	flex-direction: column;
+}
+.msh-pane { display: none; flex: 1; min-height: 0; }
+.msh-root[data-active-tab="connections"] .msh-pane-connections { display: block; }
+.msh-root[data-active-tab="mappings"]    .msh-pane-mappings    { display: block; }
+.msh-root[data-active-tab="operations"]  .msh-pane-operations  { display: block; }
+.msh-root[data-active-tab="dashboards"]  .msh-pane-dashboards  { display: block; }
+`;
+      const _Configuration = {
+        ViewIdentifier: 'MapperShell-Layout',
+        DefaultRenderable: 'MapperShell-Layout-Renderable',
+        DefaultDestinationAddress: '#MapperShell',
+        DefaultTemplateRecordAddress: 'AppData.MapperShell',
+        AutoRender: true,
+        RenderOnLoad: true,
+        CSS: SHELL_CSS,
+        CSSPriority: 500,
+        Templates: [{
+          Hash: 'MapperShell-Layout-Template',
+          Template: LAYOUT_TEMPLATE
+        }],
+        Renderables: [{
+          RenderableHash: 'MapperShell-Layout-Renderable',
+          TemplateHash: 'MapperShell-Layout-Template',
+          TemplateRecordAddress: 'AppData.MapperShell',
+          DestinationAddress: '#MapperShell',
+          RenderMethod: 'replace'
+        }]
+      };
+      class MapperShellLayoutView extends libPictView {
+        onAfterRender(pRenderable, pAddress, pRecord, pContent) {
+          this.pict.CSSMap.injectCSS();
+          // The layout's destination divs (top-nav slot + 4 section panes)
+          // only exist after THIS render lands in the DOM. Trigger the
+          // shell's child-render pass now, while the destinations are
+          // guaranteed-present, instead of in the application's
+          // onAfterInitializeAsync (which fires too early).
+          let tmpApp = this.pict.PictApplication;
+          if (tmpApp && typeof tmpApp.renderChildren === 'function') {
+            tmpApp.renderChildren();
+          }
+          return super.onAfterRender(pRenderable, pAddress, pRecord, pContent);
+        }
+      }
+      module.exports = MapperShellLayoutView;
+      module.exports.default_configuration = _Configuration;
+    }, {
+      "pict-view": 41
+    }],
+    27: [function (require, module, exports) {
+      /**
+       * Retold DataMapper — MapperShell Top Navigation View
+       *
+       * Renders the navigation tabs at the top of the mapper shell. Tabs:
+       * Connections | Mappings | Operations | Dashboards.
+       *
+       * Tab clicks route through the shell's `selectTab(key)` so the shell
+       * can update `AppData.MapperShell.ActiveTab` (which the layout's CSS
+       * picks up via `data-active-tab` to swap which pane is visible) and
+       * trigger the relevant section's `render()` if it hasn't been yet.
+       *
+       * Scope picker is at the shell level — single source of truth across
+       * all four sections via the shared `retold.dataMapper.activeScope`
+       * localStorage key.
+       */
+      'use strict';
+
+      const libPictView = require('pict-view');
+      const TOPNAV_TEMPLATE = /*html*/`
+<div class="msh-topnav">
+	<h1 class="msh-title">Retold Data Mapper</h1>
+	<div class="msh-tabs">
+		{~TS:MapperShell-TopNav-Tab:AppData.MapperShell.Tabs~}
+	</div>
+	<div class="msh-spacer"></div>
+	<label class="msh-scope-label">scope
+		<input class="msh-scope-input" type="text" spellcheck="false" placeholder="(global)"
+			value="{~Data:AppData.MapperShell.Scope~}"
+			oninput="_Pict.views['MapperShell-TopNav'].onScopeInput(this.value)" />
+	</label>
+</div>`;
+      const TAB_TEMPLATE = /*html*/`
+<a class="msh-tab msh-tab-{~Data:Record.ActiveClass~}" href="javascript:void(0)"
+	onclick="_Pict.views['MapperShell-TopNav'].selectTab('{~Data:Record.Key~}')">{~Data:Record.Label~}</a>`;
+      const TOPNAV_CSS = /*css*/`
+.msh-topnav
+{
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	padding: 10px 18px;
+	background: #0a1525;
+	border-bottom: 1px solid #1e293b;
+	flex-wrap: wrap;
+}
+.msh-title { margin: 0; font-size: 15px; font-weight: 600; color: #f8fafc; letter-spacing: 0.3px; }
+.msh-tabs { display: flex; gap: 4px; }
+.msh-spacer { flex: 1; }
+.msh-tab
+{
+	padding: 6px 14px;
+	border-radius: 4px;
+	font-size: 12px;
+	cursor: pointer;
+	text-decoration: none;
+	background: #16213e;
+	color: #cbd5e1;
+	border: 1px solid #1e293b;
+}
+.msh-tab:hover { background: #1e293b; color: #f8fafc; }
+.msh-tab.msh-tab-active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+.msh-scope-label { color: #94a3b8; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+.msh-scope-input
+{
+	background: #0f172a;
+	color: #f8fafc;
+	border: 1px solid #1e293b;
+	padding: 5px 9px;
+	border-radius: 4px;
+	font-size: 12px;
+	font-family: monospace;
+	width: 140px;
+}
+`;
+      const _TabKeys = ['connections', 'mappings', 'operations', 'dashboards'];
+      const _TabLabels = {
+        connections: 'Connections',
+        mappings: 'Mappings',
+        operations: 'Operations',
+        dashboards: 'Dashboards'
+      };
+      const _Configuration = {
+        ViewIdentifier: 'MapperShell-TopNav',
+        DefaultRenderable: 'MapperShell-TopNav-Renderable',
+        DefaultDestinationAddress: '#MapperShell-TopNav',
+        DefaultTemplateRecordAddress: 'AppData.MapperShell',
+        AutoRender: false,
+        // shell triggers render after layout mounts
+        RenderOnLoad: false,
+        CSS: TOPNAV_CSS,
+        CSSPriority: 500,
+        Templates: [{
+          Hash: 'MapperShell-TopNav-Template',
+          Template: TOPNAV_TEMPLATE
+        }, {
+          Hash: 'MapperShell-TopNav-Tab',
+          Template: TAB_TEMPLATE
+        }],
+        Renderables: [{
+          RenderableHash: 'MapperShell-TopNav-Renderable',
+          TemplateHash: 'MapperShell-TopNav-Template',
+          TemplateRecordAddress: 'AppData.MapperShell',
+          DestinationAddress: '#MapperShell-TopNav',
+          RenderMethod: 'replace'
+        }]
+      };
+      class MapperShellTopNavView extends libPictView {
+        onBeforeRender(pRenderable, pAddress, pRecord, pContent) {
+          this._populateTabs();
+          return super.onBeforeRender(pRenderable, pAddress, pRecord, pContent);
+        }
+        onAfterRender(pRenderable, pAddress, pRecord, pContent) {
+          this.pict.CSSMap.injectCSS();
+          return super.onAfterRender(pRenderable, pAddress, pRecord, pContent);
+        }
+        _populateTabs() {
+          let tmpActive = this.pict.AppData.MapperShell && this.pict.AppData.MapperShell.ActiveTab || 'connections';
+          let tmpTabs = [];
+          for (let i = 0; i < _TabKeys.length; i++) {
+            let tmpKey = _TabKeys[i];
+            tmpTabs.push({
+              Key: tmpKey,
+              Label: _TabLabels[tmpKey],
+              ActiveClass: tmpKey === tmpActive ? 'active' : 'inactive'
+            });
+          }
+          this.pict.AppData.MapperShell.Tabs = tmpTabs;
+        }
+
+        // ── Public API (called from inline handlers) ─────────────────────
+
+        selectTab(pKey) {
+          let tmpKey = String(pKey || 'connections');
+          if (_TabKeys.indexOf(tmpKey) < 0) return;
+          let tmpApp = this.pict.PictApplication;
+          if (tmpApp && typeof tmpApp.selectTab === 'function') {
+            tmpApp.selectTab(tmpKey);
+            return;
+          }
+          // Fallback: just update AppData + re-render this view.
+          this.pict.AppData.MapperShell.ActiveTab = tmpKey;
+          this.render();
+        }
+        onScopeInput(pValue) {
+          let tmpApp = this.pict.PictApplication;
+          if (tmpApp && typeof tmpApp.onScopeInput === 'function') {
+            tmpApp.onScopeInput(pValue);
+          }
+        }
+      }
+      module.exports = MapperShellTopNavView;
+      module.exports.default_configuration = _Configuration;
+      module.exports.TabKeys = _TabKeys;
+    }, {
+      "pict-view": 41
+    }],
+    28: [function (require, module, exports) {
       module.exports = {
         "name": "fable-serviceproviderbase",
         "version": "3.0.19",
@@ -3406,7 +5985,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
         }
       };
     }, {}],
-    20: [function (require, module, exports) {
+    29: [function (require, module, exports) {
       /**
       * Fable Service Base
       * @author <steven@velozo.com>
@@ -3494,9 +6073,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       // This is left here in case we want to go back to having different code/base class for "core" services
       module.exports.CoreServiceProviderBase = FableServiceProviderBase;
     }, {
-      "../package.json": 19
+      "../package.json": 28
     }],
-    21: [function (require, module, exports) {
+    30: [function (require, module, exports) {
       module.exports = {
         "name": "pict-application",
         "version": "1.0.33",
@@ -3551,7 +6130,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
         }
       };
     }, {}],
-    22: [function (require, module, exports) {
+    31: [function (require, module, exports) {
       const libFableServiceBase = require('fable-serviceproviderbase');
       const libPackage = require('../package.json');
       const defaultPictSettings = {
@@ -4783,10 +7362,10 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       }
       module.exports = PictApplication;
     }, {
-      "../package.json": 21,
-      "fable-serviceproviderbase": 20
+      "../package.json": 30,
+      "fable-serviceproviderbase": 29
     }],
-    23: [function (require, module, exports) {
+    32: [function (require, module, exports) {
       /**
        * Pict-Modal-Confirm
        *
@@ -5050,7 +7629,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       }
       module.exports = PictModalConfirm;
     }, {}],
-    24: [function (require, module, exports) {
+    33: [function (require, module, exports) {
       /**
        * Pict-Modal-Overlay
        *
@@ -5138,7 +7717,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       }
       module.exports = PictModalOverlay;
     }, {}],
-    25: [function (require, module, exports) {
+    34: [function (require, module, exports) {
       /**
        * Pict-Modal-Panel
        *
@@ -5400,7 +7979,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       }
       module.exports = PictModalPanel;
     }, {}],
-    26: [function (require, module, exports) {
+    35: [function (require, module, exports) {
       /**
        * Pict-Modal-Toast
        *
@@ -5567,7 +8146,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       }
       module.exports = PictModalToast;
     }, {}],
-    27: [function (require, module, exports) {
+    36: [function (require, module, exports) {
       /**
        * Pict-Modal-Tooltip
        *
@@ -5822,7 +8401,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       }
       module.exports = PictModalTooltip;
     }, {}],
-    28: [function (require, module, exports) {
+    37: [function (require, module, exports) {
       /**
        * Pict-Modal-Window
        *
@@ -6033,7 +8612,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       }
       module.exports = PictModalWindow;
     }, {}],
-    29: [function (require, module, exports) {
+    38: [function (require, module, exports) {
       module.exports = {
         "AutoInitialize": true,
         "AutoRender": false,
@@ -6660,7 +9239,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 `
       };
     }, {}],
-    30: [function (require, module, exports) {
+    39: [function (require, module, exports) {
       const libPictViewClass = require('pict-view');
       const libPictModalOverlay = require('./Pict-Modal-Overlay.js');
       const libPictModalConfirm = require('./Pict-Modal-Confirm.js');
@@ -6854,16 +9433,16 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictSectionModal;
       module.exports.default_configuration = _DefaultConfiguration;
     }, {
-      "./Pict-Modal-Confirm.js": 23,
-      "./Pict-Modal-Overlay.js": 24,
-      "./Pict-Modal-Panel.js": 25,
-      "./Pict-Modal-Toast.js": 26,
-      "./Pict-Modal-Tooltip.js": 27,
-      "./Pict-Modal-Window.js": 28,
-      "./Pict-Section-Modal-DefaultConfiguration.js": 29,
-      "pict-view": 32
+      "./Pict-Modal-Confirm.js": 32,
+      "./Pict-Modal-Overlay.js": 33,
+      "./Pict-Modal-Panel.js": 34,
+      "./Pict-Modal-Toast.js": 35,
+      "./Pict-Modal-Tooltip.js": 36,
+      "./Pict-Modal-Window.js": 37,
+      "./Pict-Section-Modal-DefaultConfiguration.js": 38,
+      "pict-view": 41
     }],
-    31: [function (require, module, exports) {
+    40: [function (require, module, exports) {
       module.exports = {
         "name": "pict-view",
         "version": "1.0.68",
@@ -6917,7 +9496,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
         }
       };
     }, {}],
-    32: [function (require, module, exports) {
+    41: [function (require, module, exports) {
       const libFableServiceBase = require('fable-serviceproviderbase');
       const libPackage = require('../package.json');
       const defaultPictViewSettings = {
@@ -8104,9 +10683,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       }
       module.exports = PictView;
     }, {
-      "../package.json": 31,
-      "fable-serviceproviderbase": 20
+      "../package.json": 40,
+      "fable-serviceproviderbase": 29
     }]
-  }, {}, [4])(4);
+  }, {}, [6])(6);
 });
 //# sourceMappingURL=retold-data-mapper.js.map

@@ -1,24 +1,21 @@
 /**
- * Pict-Section-Dashboard API Provider
+ * Pict-Section-Operation API Provider
  *
- * Thin REST client that talks to retold-data-mapper's /mapper/* surface.
- * Centralizes scope handling: the active scope is read from localStorage
- * (key `retold.dataMapper.activeScope`) but can be overridden per-call.
+ * Thin REST client over the data-mapper /mapper/operation* surface.
+ * Centralizes scope handling: reads from localStorage by default
+ * (key shared with pict-section-mapping and pict-section-dashboard),
+ * can be overridden per section via constructor option, or per call.
  *
- * The host application doesn't have to know how the data-mapper REST is
- * shaped — it just calls listDashboards / loadDashboard / saveDashboard /
- * deleteDashboard / fetchPanelData and gets a Promise back.
- *
- * Bearer-token write gate: when WriteToken is set, POST/PUT/DELETE carry
- * `Authorization: Bearer <token>` to satisfy the data-mapper's
- * DATA_MAPPER_WRITE_TOKEN env-driven gate (Phase 2b hardening).
- * GET stays open.
+ * Bearer-token write gate: when a `WriteToken` is provided (matching
+ * the data-mapper's DATA_MAPPER_WRITE_TOKEN env), the provider
+ * injects `Authorization: Bearer <token>` on POST/PUT/DELETE.
+ * GET stays open per the data-mapper's gate convention.
  */
 'use strict';
 
 const SCOPE_STORAGE_KEY = 'retold.dataMapper.activeScope';
 
-class DashboardAPIProvider
+class OperationAPIProvider
 {
 	constructor(pOptions)
 	{
@@ -29,18 +26,13 @@ class DashboardAPIProvider
 			? tmpOptions.WriteToken : null;
 	}
 
-	/**
-	 * Resolve the active scope. Order: explicit per-call scope →
-	 * provider option → localStorage → '' (global).
-	 *
-	 * localStorage access is wrapped in try/catch because some sandbox
-	 * environments (jsdom with opaque origin, cross-origin iframes,
-	 * private-mode browsers with quotas) throw on read.
-	 */
 	getScope(pCallScope)
 	{
 		if (typeof pCallScope === 'string') return pCallScope;
 		if (typeof this._scopeOverride === 'string') return this._scopeOverride;
+		// localStorage access can throw "SecurityError: localStorage is not
+		// available for opaque origins" in some sandbox/test environments,
+		// so guard with try/catch rather than just `typeof !== 'undefined'`.
 		try
 		{
 			if (typeof localStorage !== 'undefined')
@@ -72,9 +64,6 @@ class DashboardAPIProvider
 		this._writeToken = (typeof pToken === 'string' && pToken.length > 0) ? pToken : null;
 	}
 
-	/**
-	 * Internal fetch wrapper that surfaces non-2xx as rejected promises.
-	 */
 	_fetch(pMethod, pPath, pBody)
 	{
 		let tmpOpts = { method: pMethod, headers: {} };
@@ -85,6 +74,9 @@ class DashboardAPIProvider
 			tmpOpts.headers['Content-Type'] = 'application/json';
 			tmpOpts.body = JSON.stringify(pBody);
 		}
+		// Bearer-token injection on writes when configured. Server's
+		// DATA_MAPPER_WRITE_TOKEN gate (Phase 2b hardening) requires
+		// `Authorization: Bearer <token>` on every non-GET to /mapper/*.
 		if (tmpIsWrite && this._writeToken)
 		{
 			tmpOpts.headers['Authorization'] = 'Bearer ' + this._writeToken;
@@ -96,7 +88,7 @@ class DashboardAPIProvider
 			{
 				return pRes.text().then((pText) =>
 				{
-					let tmpMsg = pText && pText.length < 300 ? pText : ('HTTP ' + pRes.status);
+					let tmpMsg = pText && pText.length < 400 ? pText : ('HTTP ' + pRes.status);
 					throw new Error(tmpMsg);
 				});
 			}
@@ -109,53 +101,61 @@ class DashboardAPIProvider
 	_scopeQuery(pScope)
 	{
 		let tmpScope = this.getScope(pScope);
-		// Empty string scope is the default on the server; no need to send it.
-		// '*' explicitly asks for cross-scope listing.
 		if (tmpScope === '') return '';
 		return '?scope=' + encodeURIComponent(tmpScope);
 	}
 
-	listDashboards(pScope)
+	listOperations(pScope)
 	{
-		return this._fetch('GET', '/dashboards' + this._scopeQuery(pScope));
+		return this._fetch('GET', '/operations' + this._scopeQuery(pScope));
 	}
 
-	loadDashboard(pHash, pScope)
+	getOperation(pHash, pScope)
 	{
-		return this._fetch('GET', '/dashboard/' + encodeURIComponent(pHash) + this._scopeQuery(pScope));
+		return this._fetch('GET', '/operation/' + encodeURIComponent(pHash) + this._scopeQuery(pScope));
 	}
 
-	saveDashboard(pRecord, pScope)
+	saveOperation(pRecord, pScope)
 	{
-		// Caller's record can omit Scope; we inject the active one if so.
 		let tmpRecord = Object.assign({}, pRecord);
 		if (tmpRecord.Scope === undefined) tmpRecord.Scope = this.getScope(pScope);
-		if (tmpRecord.IDDashboardConfig)
+		if (tmpRecord.IDOperationConfig)
 		{
-			let tmpID = tmpRecord.IDDashboardConfig;
-			delete tmpRecord.IDDashboardConfig;
-			return this._fetch('PUT', '/dashboard/' + tmpID, tmpRecord);
+			let tmpID = tmpRecord.IDOperationConfig;
+			delete tmpRecord.IDOperationConfig;
+			return this._fetch('PUT', '/operation/' + tmpID, tmpRecord);
 		}
-		return this._fetch('POST', '/dashboards', tmpRecord);
+		return this._fetch('POST', '/operations', tmpRecord);
 	}
 
-	deleteDashboard(pID)
+	deleteOperation(pID)
 	{
-		return this._fetch('DELETE', '/dashboard/' + pID);
+		return this._fetch('DELETE', '/operation/' + pID);
 	}
 
-	fetchPanelData(pPanel, pPage, pPageSize)
+	// Run goes through UV — server route is /mapper/uv/run-operation/:id
+	// (Phase 2b). The previous implementation pointed at /operation/:id/run
+	// which never existed, so runs always returned a 404.
+	runOperation(pID)
+	{
+		return this._fetch('POST', '/uv/run-operation/' + pID, {});
+	}
+
+	// Lake-sample peek — same surface used by the dashboard panel data
+	// fetch. Renders five rows from a beacon/connection/table tuple so the
+	// section can show a "what does this target table look like?" preview.
+	peekTable(pBeaconName, pConnectionHash, pEntity, pPageSize, pPage)
 	{
 		return this._fetch('POST', '/dashboard/panel-data',
 			{
-				BeaconName:     pPanel.BeaconName,
-				ConnectionName: pPanel.ConnectionName,
-				Endpoint:       pPanel.Endpoint,
-				PageSize:       pPageSize,
-				Page:           pPage
+				BeaconName:     pBeaconName,
+				ConnectionName: pConnectionHash,
+				Endpoint:       pEntity,
+				PageSize:       pPageSize || 5,
+				Page:           pPage || 0
 			});
 	}
 }
 
-module.exports = DashboardAPIProvider;
+module.exports = OperationAPIProvider;
 module.exports.SCOPE_STORAGE_KEY = SCOPE_STORAGE_KEY;

@@ -26,6 +26,7 @@ module.exports =
 	InitialDashboardHash: null,
 	ShowToolbar:          true,
 	Scope:                null,           // null = read from localStorage; '' = global; '<value>' = pinned
+	WriteToken:           null,           // bearer token for POST/PUT/DELETE when DATA_MAPPER_WRITE_TOKEN is set on the server
 	ListPageSize:         25,             // default panel paging when not specified by Layout
 	ListCompactRows:      10              // default cap for list-compact panels
 

@@ -33,6 +33,16 @@
  * via direct DOM manipulation (not Pict templates) because dashboard
  * layouts are arbitrary nested JSON and don't fit the template-engine
  * iteration model. State + lifecycle are still Pict-managed.
+ *
+ * **Documented exception to modules/pict/CLAUDE.md template conventions.**
+ * The recursive layout dispatch (rows containing columns containing rows
+ * containing panels — arbitrary depth) doesn't compose cleanly with the
+ * `{~TS:RowTemplate:Address~}` iteration model, which has no recursive
+ * "render this same template against my children" idiom. CLAUDE.md
+ * explicitly allows legitimate exceptions; this is one. The toolbar /
+ * list / editor sub-views could be template-driven (parallel to
+ * pict-section-operation and pict-section-mapping); a follow-up refactor
+ * may carve those out while keeping the panel-layout dispatcher imperative.
  */
 'use strict';
 
@@ -50,7 +60,8 @@ class PictSectionDashboard extends libPictView
 
 		this._API = new libAPIProvider({
 			APIBaseUrl: this.options.APIBaseUrl,
-			Scope:      this.options.Scope
+			Scope:      this.options.Scope,
+			WriteToken: this.options.WriteToken
 		});
 
 		// Internal state (not exposed via AppData; this section is

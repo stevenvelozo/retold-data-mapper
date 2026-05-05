@@ -1,27 +1,43 @@
 /**
  * Pict-Section-Mapping
  *
- * Embeddable Pict view for Mapping CRUD. Mappings are intent docs that
- * the data-mapper compiles into Ultravisor Operations on demand. The
- * Run / Save-and-Schedule actions live on the editor and route through
- * the data-mapper bridge's /uv/* proxy endpoints to Ultravisor.
+ * Embeddable Pict view for Mapping CRUD + Run, surfacing the
+ * retold-data-mapper /mapper/mapping* REST API.
  *
- *   - List view with per-row Edit / Delete actions
- *   - Editor with form fields + JSON MappingConfiguration textarea
+ * Template-driven per modules/pict/CLAUDE.md (mirrors pict-section-operation):
+ *   - All state lives in pict.AppData.Mapping.*
+ *   - Templates + Renderables; no document.createElement, no .onclick closures.
+ *   - View switching uses single-element-array slots driven by {~TS:~}.
+ *   - Modal interactions via pict-section-modal; no native popups.
+ *
+ * Modes:
+ *   `manage`     full CRUD (default)
+ *   `list-only`  list-only — Run/Edit/Delete + the New button are suppressed.
+ *
+ * Public API (called by host apps and inline template handlers):
+ *   openList()
+ *   openEditor(pRecOrID)        // null = new
+ *   saveEditing()
+ *   runMapping(pIDMappingConfig)
+ *   deleteMapping(pIDMappingConfig)
+ *   onScopeInput(pValue)
+ *   setEditingField(pName, pValue)
+ *   refresh()
  *
  * Note: the data-mapper also has a separate visual mapping editor
- * (the existing pict-app at index.html) for graphical field mapping.
- * This section is the lightweight CRUD surface; the visual editor is
- * the richer alternative for editing MappingConfiguration.
+ * (the Pict app at index.html) for graphical field mapping. This
+ * section is the lightweight CRUD + Run surface; the visual editor
+ * is the richer alternative for editing MappingConfiguration.
  */
 'use strict';
 
-const libPictView    = require('pict-view');
+const libPictView = require('pict-view');
 const libDefaultConf = require('./Pict-Section-Mapping-DefaultConfiguration.js');
-const libCSS         = require('./Pict-Section-Mapping-CSS.js');
+const libCSS = require('./Pict-Section-Mapping-CSS.js');
 const libAPIProvider = require('./providers/PictProvider-Mapping-API.js');
 
-const DEFAULT_MAPPING_CONFIGURATION = {
+const DEFAULT_MAPPING_CONFIGURATION =
+{
 	Entity:       '/* TargetEntity */',
 	GUIDName:     'GUID/* TargetEntity */',
 	GUIDTemplate: '/* {~D:Record.SourceField~} for unique-per-row GUID */',
@@ -32,6 +48,24 @@ const DEFAULT_MAPPING_CONFIGURATION = {
 	}
 };
 
+const DEFAULT_MAPPING_CONFIGURATION_TEXT = JSON.stringify(DEFAULT_MAPPING_CONFIGURATION, null, 2);
+
+const RUN_STAT_FIELDS = ['RowsRead', 'RowsMapped', 'RowsWritten', 'Errors', 'TargetEntity', 'ElapsedMs'];
+
+const SOURCE_EDITOR_FIELDS =
+[
+	{ Field: 'SourceBeaconName',     Label: 'Beacon' },
+	{ Field: 'SourceConnectionHash', Label: 'Connection' },
+	{ Field: 'SourceEntity',         Label: 'Entity' }
+];
+
+const TARGET_EDITOR_FIELDS =
+[
+	{ Field: 'TargetBeaconName',     Label: 'Beacon' },
+	{ Field: 'TargetConnectionHash', Label: 'Connection' },
+	{ Field: 'TargetEntity',         Label: 'Entity' }
+];
+
 class PictSectionMapping extends libPictView
 {
 	constructor(pFable, pOptions, pServiceHash)
@@ -41,558 +75,407 @@ class PictSectionMapping extends libPictView
 
 		this._API = new libAPIProvider({
 			APIBaseUrl: this.options.APIBaseUrl,
-			Scope:      this.options.Scope
+			Scope:      this.options.Scope,
+			WriteToken: this.options.WriteToken
 		});
-
-		this._state = { view: 'list', mappings: [], editing: null };
 
 		if (this.pict && this.pict.CSSMap && typeof this.pict.CSSMap.addCSS === 'function')
 		{
 			this.pict.CSSMap.addCSS('Pict-Section-Mapping-CSS', libCSS, 500);
 		}
+
+		this._seedAppData();
+		this._scopeDebounce = null;
 	}
 
-	openList()         { this._state.view = 'list'; this._state.editing = null; this.render(); }
-	openEditor(pRec)   { this._state.editing = pRec || null; this._state.view = 'edit'; this.render(); }
-	refresh()          { this.render(); }
+	_seedAppData()
+	{
+		if (!this.pict.AppData) this.pict.AppData = {};
+		this.pict.AppData.Mapping = Object.assign(
+			{
+				Mode:                 this.options.Mode || 'manage',
+				ShowToolbar:          !!this.options.ShowToolbar,
+				Scope:                this._API.getScope(),
+				View:                 'list',     // 'list' | 'edit'
+				Mappings:             [],
+				Editing:              null,
+				EditorError:          '',
+				LoadState:            'idle',     // 'idle' | 'loading' | 'error' | 'empty' | 'ready'
+				LoadErrorMessage:     '',
+				EmptyMessage:         '',
+				RunResults:           {},
+
+				ToolbarSlot:          [],
+				BackLinkSlot:         [],
+				NewButtonSlot:        [],
+				ListSlot:             [],
+				EditSlot:             [],
+				LoadingSlot:          [],
+				LoadErrorSlot:        [],
+				EmptySlot:            [],
+				ListBodySlot:         []
+			},
+			this.pict.AppData.Mapping || {});
+	}
+
+	// ── Lifecycle ────────────────────────────────────────────────────
+
+	onAfterInitialize()
+	{
+		this._loadList();
+		return super.onAfterInitialize();
+	}
+
+	onBeforeRender(pRenderable, pAddress, pRecord, pContent)
+	{
+		this._populateSlots();
+		return super.onBeforeRender(pRenderable, pAddress, pRecord, pContent);
+	}
 
 	onAfterRender(pRenderable, pAddress, pRecord, pContent)
 	{
 		this.pict.CSSMap.injectCSS();
-		this._mount();
 		return super.onAfterRender(pRenderable, pAddress, pRecord, pContent);
 	}
 
-	_mount()
+	// ── Public API ───────────────────────────────────────────────────
+
+	openList()
 	{
-		let tmpDest = this._dest();
-		if (!tmpDest) return;
-		tmpDest.innerHTML = '';
-		tmpDest.classList.add('psm-root');
-		tmpDest.classList.add('psm-mode-' + this.options.Mode);
-		if (this.options.ShowToolbar) tmpDest.appendChild(this._buildToolbar());
-		let tmpContent = document.createElement('div');
-		tmpContent.className = 'psm-content';
-		tmpDest.appendChild(tmpContent);
-		if (this._state.view === 'list')      this._mountList(tmpContent);
-		else if (this._state.view === 'edit') this._mountEditor(tmpContent);
+		this.pict.AppData.Mapping.View = 'list';
+		this.pict.AppData.Mapping.Editing = null;
+		this.pict.AppData.Mapping.EditorError = '';
+		this._loadList();
 	}
 
-	_dest()
+	openEditor(pRecOrID)
 	{
-		let tmpAddr = this.options.ContentDestinationAddress;
-		if (!tmpAddr || typeof document === 'undefined') return null;
-		return document.querySelector(tmpAddr);
-	}
-
-	_buildToolbar()
-	{
-		let tmpBar = document.createElement('div');
-		tmpBar.className = 'psm-toolbar';
-		let tmpTitle = document.createElement('h2'); tmpTitle.textContent = 'Mappings';
-		tmpBar.appendChild(tmpTitle);
-
-		if (this._state.view !== 'list')
+		if (pRecOrID == null)
 		{
-			let tmpBack = document.createElement('a');
-			tmpBack.className = 'psm-btn'; tmpBack.textContent = '← All mappings';
-			tmpBack.href = 'javascript:void(0)'; tmpBack.onclick = () => this.openList();
-			tmpBar.appendChild(tmpBack);
+			this._openEditorWith(null);
+			return;
 		}
-
-		let tmpSpacer = document.createElement('span');
-		tmpSpacer.className = 'psm-toolbar-spacer';
-		tmpBar.appendChild(tmpSpacer);
-
-		let tmpScopeLabel = document.createElement('label');
-		tmpScopeLabel.textContent = 'scope';
-		let tmpScopeInput = document.createElement('input');
-		tmpScopeInput.type = 'text'; tmpScopeInput.className = 'psm-scope-input';
-		tmpScopeInput.placeholder = '(global)'; tmpScopeInput.spellcheck = false;
-		tmpScopeInput.value = this._API.getScope();
-		let tmpDebounce = null;
-		tmpScopeInput.oninput = () =>
+		if (typeof pRecOrID === 'object')
 		{
-			clearTimeout(tmpDebounce);
-			tmpDebounce = setTimeout(() =>
-			{
-				this._API.setScope(tmpScopeInput.value.trim());
-				this._state.view = 'list'; this._state.editing = null;
-				this.render();
-			}, 300);
-		};
-		tmpScopeLabel.appendChild(tmpScopeInput);
-		let tmpScopeHint = document.createElement('span');
-		tmpScopeHint.className = 'psm-scope-hint';
-		tmpScopeHint.textContent = 'empty = global • * = all';
-		tmpScopeLabel.appendChild(tmpScopeHint);
-		tmpBar.appendChild(tmpScopeLabel);
-
-		if (this.options.Mode === 'manage' && this._state.view === 'list')
-		{
-			let tmpNew = document.createElement('a');
-			tmpNew.className = 'psm-btn psm-btn-primary'; tmpNew.textContent = '+ New mapping';
-			tmpNew.href = 'javascript:void(0)'; tmpNew.onclick = () => this.openEditor(null);
-			tmpBar.appendChild(tmpNew);
+			this._openEditorWith(pRecOrID);
+			return;
 		}
-		return tmpBar;
+		let tmpID = parseInt(pRecOrID, 10);
+		let tmpFound = this.pict.AppData.Mapping.Mappings.find((r) => r.IDMappingConfig === tmpID);
+		this._openEditorWith(tmpFound || null);
 	}
 
-	// ── List view ──────────────────────────────────────────────────
-
-	_mountList(pHost)
+	saveEditing()
 	{
-		let tmpStatus = document.createElement('div');
-		tmpStatus.className = 'psm-empty'; tmpStatus.textContent = 'Loading…';
-		pHost.appendChild(tmpStatus);
-
-		this._API.listMappings().then((pData) =>
+		let tmpRec = this.pict.AppData.Mapping.Editing;
+		if (!tmpRec)
 		{
-			pHost.innerHTML = '';
-			let tmpRows = (pData && pData.Mappings) || [];
-			this._state.mappings = tmpRows;
-			if (tmpRows.length === 0)
-			{
-				let tmpEmpty = document.createElement('div');
-				tmpEmpty.className = 'psm-empty';
-				let tmpScope = this._API.getScope();
-				tmpEmpty.textContent = 'No mappings in '
-					+ (tmpScope === '' ? 'global scope' : ('scope "' + tmpScope + '"'))
-					+ '. Use scope=* to see all.';
-				pHost.appendChild(tmpEmpty);
-				return;
-			}
-			let tmpList = document.createElement('div');
-			tmpList.className = 'psm-list';
-			for (let i = 0; i < tmpRows.length; i++) tmpList.appendChild(this._buildListRow(tmpRows[i]));
-			pHost.appendChild(tmpList);
-		}).catch((pErr) =>
-		{
-			pHost.innerHTML = '';
-			let tmpErr = document.createElement('div');
-			tmpErr.className = 'psm-error';
-			tmpErr.textContent = 'Failed to load mappings: ' + pErr.message;
-			pHost.appendChild(tmpErr);
-		});
-	}
-
-	_buildListRow(pRow)
-	{
-		let tmpRow = document.createElement('div');
-		tmpRow.className = 'psm-list-row';
-
-		let tmpName = document.createElement('div');
-		tmpName.className = 'psm-row-name';
-		tmpName.textContent = pRow.Name || '(unnamed)';
-		if (pRow.Scope) { let tmpScope = document.createElement('span'); tmpScope.className = 'psm-row-scope'; tmpScope.textContent = '· ' + pRow.Scope; tmpName.appendChild(tmpScope); }
-		tmpRow.appendChild(tmpName);
-
-		let tmpDesc = document.createElement('div');
-		tmpDesc.className = 'psm-row-desc';
-		tmpDesc.textContent = pRow.Description || '';
-		tmpRow.appendChild(tmpDesc);
-
-		let tmpFlow = document.createElement('div');
-		tmpFlow.className = 'psm-row-flow';
-		tmpFlow.textContent = (pRow.SourceBeaconName || '?') + '/' + (pRow.SourceEntity || '?')
-			+ ' → ' + (pRow.TargetBeaconName || '?') + '/' + (pRow.TargetEntity || '?');
-		tmpRow.appendChild(tmpFlow);
-
-		let tmpActions = document.createElement('div');
-		tmpActions.className = 'psm-row-actions';
-		if (this.options.Mode === 'manage')
-		{
-			let tmpRun = document.createElement('a');
-			tmpRun.className = 'psm-btn psm-btn-success'; tmpRun.textContent = '▶ Run via UV';
-			tmpRun.href = 'javascript:void(0)'; tmpRun.onclick = () => this._runViaUltravisor(pRow, tmpRow);
-			tmpRun.title = 'Compile this mapping into an Ultravisor Operation, run it through UV\'s queue, and show the manifest summary.';
-			tmpActions.appendChild(tmpRun);
-			let tmpEdit = document.createElement('a');
-			tmpEdit.className = 'psm-btn'; tmpEdit.textContent = 'Edit';
-			tmpEdit.href = 'javascript:void(0)'; tmpEdit.onclick = () => this.openEditor(pRow);
-			tmpActions.appendChild(tmpEdit);
-			let tmpDel = document.createElement('a');
-			tmpDel.className = 'psm-btn psm-btn-danger'; tmpDel.textContent = 'Delete';
-			tmpDel.href = 'javascript:void(0)'; tmpDel.onclick = () => this._confirmDelete(pRow);
-			tmpActions.appendChild(tmpDel);
+			this._toast('Nothing to save.', 'error');
+			return;
 		}
-		tmpRow.appendChild(tmpActions);
-		return tmpRow;
+		if (!tmpRec.Name || !tmpRec.Name.trim())
+		{
+			this._setEditorError('Name is required.');
+			return;
+		}
+		let tmpConfRaw = (typeof tmpRec.MappingConfiguration === 'string')
+			? tmpRec.MappingConfiguration
+			: JSON.stringify(tmpRec.MappingConfiguration || {}, null, 2);
+		let tmpConfParsed;
+		try { tmpConfParsed = JSON.parse(tmpConfRaw); }
+		catch (pErr) { this._setEditorError('Configuration JSON parse error: ' + pErr.message); return; }
+
+		let tmpIsNew = !tmpRec.IDMappingConfig;
+		let tmpPayload = Object.assign({}, tmpRec, { MappingConfiguration: tmpConfParsed });
+
+		this._API.saveMapping(tmpPayload).then(() =>
+		{
+			this._toast(tmpIsNew ? 'Mapping created.' : 'Mapping saved.', 'success');
+			this.openList();
+		}).catch((pErr) => this._setEditorError(pErr.message));
 	}
 
-	// Compile this mapping into a UV Operation (server-side), run it through
-	// the queue, and render the manifest summary inline. This is the new
-	// "glue" path — the data-mapper UI captures intent, UV does the work.
-	_runViaUltravisor(pRow, pRowEl)
+	runMapping(pIDMappingConfig)
 	{
-		if (!pRow.IDMappingConfig)
+		let tmpID = parseInt(pIDMappingConfig, 10);
+		if (!tmpID)
 		{
 			this._toast('Run failed: missing IDMappingConfig', 'error');
 			return;
 		}
-		let tmpRunBtn = pRowEl.querySelector('.psm-btn-success');
-		let tmpOriginal = tmpRunBtn ? tmpRunBtn.textContent : '';
-		if (tmpRunBtn) { tmpRunBtn.textContent = 'Running…'; tmpRunBtn.classList.add('psm-btn-disabled'); }
+		let tmpMap = this.pict.AppData.Mapping.Mappings.find((r) => r.IDMappingConfig === tmpID);
+		let tmpName = tmpMap ? (tmpMap.Name || tmpMap.Hash || ('mapping ' + tmpID)) : ('mapping ' + tmpID);
 
-		this._API.runViaUltravisor(pRow.IDMappingConfig).then((pResult) =>
+		this.pict.AppData.Mapping.RunResults[tmpID] = { Status: 'Running' };
+		this.render();
+
+		this._API.runMapping(tmpID).then((pResult) =>
 		{
-			if (tmpRunBtn) { tmpRunBtn.textContent = tmpOriginal; tmpRunBtn.classList.remove('psm-btn-disabled'); }
-			this._renderUVResult(pRowEl, pRow, pResult, false);
+			this.pict.AppData.Mapping.RunResults[tmpID] = Object.assign({}, pResult || {}, { Status: 'Success', Hash: tmpName });
+			this.render();
 		}).catch((pErr) =>
 		{
-			if (tmpRunBtn) { tmpRunBtn.textContent = tmpOriginal; tmpRunBtn.classList.remove('psm-btn-disabled'); }
-			this._renderUVResult(pRowEl, pRow, { Error: pErr.message }, true);
+			this.pict.AppData.Mapping.RunResults[tmpID] = { Status: 'Error', Hash: tmpName, Error: pErr.message };
+			this.render();
 		});
 	}
 
-	_renderUVResult(pRowEl, pRow, pResult, pIsError)
+	deleteMapping(pIDMappingConfig)
 	{
-		let tmpExisting = pRowEl.nextElementSibling;
-		if (tmpExisting && tmpExisting.classList && tmpExisting.classList.contains('psm-run-result')) tmpExisting.remove();
-
-		let tmpPanel = document.createElement('div');
-		tmpPanel.className = 'psm-run-result ' + (pIsError ? 'psm-run-error' : 'psm-run-success');
-
-		let tmpHeader = document.createElement('h4');
-		let tmpName = pRow.Name || pRow.Hash || ('mapping ' + pRow.IDMappingConfig);
-		let tmpUVLabel = pResult && pResult.OperationHash ? (' [' + pResult.OperationHash + ']') : '';
-		tmpHeader.textContent = pIsError
-			? ('✗  ' + tmpName + ' — failed')
-			: ('✓  ' + tmpName + tmpUVLabel + ' — ' + (pResult.Status || 'unknown'));
-		tmpPanel.appendChild(tmpHeader);
-
-		if (pIsError)
+		let tmpID = parseInt(pIDMappingConfig, 10);
+		if (!tmpID)
 		{
-			let tmpErr = document.createElement('div');
-			tmpErr.style.color = '#fecaca'; tmpErr.style.fontFamily = 'monospace'; tmpErr.style.fontSize = '12px';
-			tmpErr.textContent = pResult.Error;
-			tmpPanel.appendChild(tmpErr);
-		}
-		else
-		{
-			let tmpStats = document.createElement('div');
-			tmpStats.className = 'psm-run-stats';
-			let tmpTopFields = ['ElapsedMs'];
-			for (let i = 0; i < tmpTopFields.length; i++)
-			{
-				if (pResult[tmpTopFields[i]] === undefined || pResult[tmpTopFields[i]] === null) continue;
-				let tmpStat = document.createElement('div');
-				tmpStat.className = 'psm-run-stat';
-				let tmpLabel = document.createElement('span');
-				tmpLabel.className = 'psm-stat-label'; tmpLabel.textContent = tmpTopFields[i];
-				let tmpValue = document.createElement('span');
-				tmpValue.className = 'psm-stat-value'; tmpValue.textContent = String(pResult[tmpTopFields[i]]);
-				tmpStat.appendChild(tmpLabel); tmpStat.appendChild(tmpValue);
-				tmpStats.appendChild(tmpStat);
-			}
-			tmpPanel.appendChild(tmpStats);
-
-			// Per-task breakdown — pull/map/write counts from the manifest.
-			let tmpTO = pResult.TaskOutputs || {};
-			let tmpTaskKeys = Object.keys(tmpTO);
-			if (tmpTaskKeys.length > 0)
-			{
-				let tmpBreakdown = document.createElement('div');
-				tmpBreakdown.className = 'psm-run-stats';
-				tmpBreakdown.style.marginTop = '8px';
-				for (let k = 0; k < tmpTaskKeys.length; k++)
-				{
-					let tmpKey = tmpTaskKeys[k];
-					let tmpRow = tmpTO[tmpKey];
-					let tmpStat = document.createElement('div');
-					tmpStat.className = 'psm-run-stat';
-					let tmpLabel = document.createElement('span');
-					tmpLabel.className = 'psm-stat-label'; tmpLabel.textContent = tmpKey;
-					let tmpValue = document.createElement('span');
-					tmpValue.className = 'psm-stat-value';
-					let tmpParts = [];
-					if (tmpRow.RecordCount !== undefined) tmpParts.push('records=' + tmpRow.RecordCount);
-					if (tmpRow.Written     !== undefined) tmpParts.push('written=' + tmpRow.Written);
-					if (tmpRow.Errors      !== undefined && tmpRow.Errors !== 0) tmpParts.push('errors=' + tmpRow.Errors);
-					tmpValue.textContent = tmpParts.join('  ');
-					tmpStat.appendChild(tmpLabel); tmpStat.appendChild(tmpValue);
-					tmpBreakdown.appendChild(tmpStat);
-				}
-				tmpPanel.appendChild(tmpBreakdown);
-			}
-		}
-		pRowEl.parentNode.insertBefore(tmpPanel, pRowEl.nextSibling);
-	}
-
-	_confirmDelete(pRow)
-	{
-		let tmpModal = this.pict.views && this.pict.views.Modal;
-		if (tmpModal && typeof tmpModal.confirm === 'function')
-		{
-			tmpModal.confirm(
-				'Delete mapping "' + (pRow.Name || pRow.Hash) + '"? This cannot be undone.',
-				{ confirmLabel: 'Delete', cancelLabel: 'Cancel', dangerous: true })
-				.then((pOk) => { if (pOk) this._doDelete(pRow); });
+			this._toast('Delete failed: missing IDMappingConfig', 'error');
 			return;
 		}
-		// eslint-disable-next-line no-alert
-		if (typeof confirm === 'function' && confirm('Delete mapping "' + (pRow.Name) + '"?')) this._doDelete(pRow);
-	}
+		let tmpMap = this.pict.AppData.Mapping.Mappings.find((r) => r.IDMappingConfig === tmpID);
+		let tmpLabel = tmpMap ? (tmpMap.Name || tmpMap.Hash || ('mapping ' + tmpID)) : ('mapping ' + tmpID);
 
-	_doDelete(pRow)
-	{
-		if (!pRow.IDMappingConfig) { this._toast('Delete failed: missing IDMappingConfig', 'error'); return; }
-		this._API.deleteMapping(pRow.IDMappingConfig).then(() =>
-		{
-			this._toast('Mapping deleted.', 'success');
-			this.openList();
-		}).catch((pErr) => this._toast('Delete failed: ' + pErr.message, 'error'));
-	}
-
-	_toast(pMsg, pType)
-	{
-		let tmpModal = this.pict.views && this.pict.views.Modal;
-		if (tmpModal && typeof tmpModal.toast === 'function') { tmpModal.toast(pMsg, { type: pType || 'info' }); return; }
-		// eslint-disable-next-line no-console
-		console.log('[psm]', pMsg);
-	}
-
-	// ── Editor ─────────────────────────────────────────────────────
-
-	_mountEditor(pHost)
-	{
-		let tmpRec = this._state.editing || {
-			Scope: this._API.getScope(),
-			Name: '', Description: '',
-			SourceBeaconName: '', SourceConnectionHash: '', SourceEntity: '',
-			TargetBeaconName: '', TargetConnectionHash: '', TargetEntity: '',
-			MappingConfiguration: JSON.stringify(DEFAULT_MAPPING_CONFIGURATION, null, 2)
-		};
-		let tmpIsNew = !(tmpRec && tmpRec.IDMappingConfig);
-
-		let tmpConfText = (typeof tmpRec.MappingConfiguration === 'string')
-			? tmpRec.MappingConfiguration
-			: JSON.stringify(tmpRec.MappingConfiguration || {}, null, 2);
-
-		let tmpWrap = document.createElement('div'); tmpWrap.className = 'psm-editor';
-		let tmpHeader = document.createElement('div'); tmpHeader.className = 'psm-editor-header';
-		let tmpHeaderTitle = document.createElement('h3');
-		tmpHeaderTitle.textContent = tmpIsNew ? 'New mapping' : ('Edit mapping "' + (tmpRec.Name || tmpRec.IDMappingConfig) + '"');
-		tmpHeader.appendChild(tmpHeaderTitle);
-		tmpWrap.appendChild(tmpHeader);
-
-		let tmpForm = document.createElement('div'); tmpForm.className = 'psm-editor-form';
-
-		let tmpNameLbl = document.createElement('label'); tmpNameLbl.textContent = 'Name';
-		let tmpNameInput = document.createElement('input'); tmpNameInput.type = 'text';
-		tmpNameInput.value = tmpRec.Name || '';
-		tmpNameInput.placeholder = 'Human-readable name (e.g. "weather → WeatherSummary")';
-		tmpForm.appendChild(tmpNameLbl); tmpForm.appendChild(tmpNameInput);
-
-		let tmpScopeLbl = document.createElement('label'); tmpScopeLbl.textContent = 'Scope';
-		let tmpScopeInput = document.createElement('input'); tmpScopeInput.type = 'text';
-		tmpScopeInput.value = tmpRec.Scope || ''; tmpScopeInput.placeholder = '(empty = global)';
-		tmpForm.appendChild(tmpScopeLbl); tmpForm.appendChild(tmpScopeInput);
-
-		let tmpDescLbl = document.createElement('label'); tmpDescLbl.textContent = 'Description';
-		let tmpDescInput = document.createElement('input'); tmpDescInput.type = 'text';
-		tmpDescInput.value = tmpRec.Description || '';
-		tmpForm.appendChild(tmpDescLbl); tmpForm.appendChild(tmpDescInput);
-
-		let tmpSTLbl = document.createElement('label'); tmpSTLbl.textContent = 'Source ↔ Target';
-		let tmpST = document.createElement('div'); tmpST.className = 'psm-source-target';
-		let tmpSrc = this._buildSTSection('Source',
-			['SourceBeaconName', 'SourceConnectionHash', 'SourceEntity'],
-			['Beacon', 'Connection', 'Entity'],
-			[tmpRec.SourceBeaconName, tmpRec.SourceConnectionHash, tmpRec.SourceEntity]);
-		let tmpTgt = this._buildSTSection('Target',
-			['TargetBeaconName', 'TargetConnectionHash', 'TargetEntity'],
-			['Beacon', 'Connection', 'Entity'],
-			[tmpRec.TargetBeaconName, tmpRec.TargetConnectionHash, tmpRec.TargetEntity]);
-		tmpST.appendChild(tmpSrc.section); tmpST.appendChild(tmpTgt.section);
-		tmpForm.appendChild(tmpSTLbl); tmpForm.appendChild(tmpST);
-
-		let tmpConfLbl = document.createElement('label'); tmpConfLbl.textContent = 'Configuration (JSON)';
-		let tmpConfWrap = document.createElement('div');
-
-		// Phase C: source-column discovery. "Discover columns" calls the
-		// data-mapper bridge, which dispatches Introspect through UV
-		// to the source beacon and returns the chosen entity's columns.
-		// Each column renders as a chip; clicking inserts a {~D:Record.X~}
-		// template snippet at the textarea's caret. Cuts the typing
-		// without trying to be a full visual mapper.
-		let tmpDiscoverBar = document.createElement('div');
-		tmpDiscoverBar.className = 'psm-discover-bar';
-		let tmpDiscoverBtn = document.createElement('a');
-		tmpDiscoverBtn.className = 'psm-btn psm-btn-secondary';
-		tmpDiscoverBtn.href = 'javascript:void(0)';
-		tmpDiscoverBtn.textContent = '⌕ Discover source columns';
-		tmpDiscoverBtn.title = 'Introspect the source beacon for the columns of the selected source Entity.';
-		tmpDiscoverBar.appendChild(tmpDiscoverBtn);
-		let tmpDiscoverStatus = document.createElement('span');
-		tmpDiscoverStatus.className = 'psm-discover-status';
-		tmpDiscoverStatus.style.marginLeft = '8px';
-		tmpDiscoverStatus.style.fontSize = '12px';
-		tmpDiscoverStatus.style.color = '#94a3b8';
-		tmpDiscoverBar.appendChild(tmpDiscoverStatus);
-		tmpConfWrap.appendChild(tmpDiscoverBar);
-
-		let tmpChipBar = document.createElement('div');
-		tmpChipBar.className = 'psm-chip-bar';
-		tmpChipBar.style.display = 'none';
-		tmpConfWrap.appendChild(tmpChipBar);
-
-		let tmpConfTA = document.createElement('textarea'); tmpConfTA.spellcheck = false;
-		tmpConfTA.value = tmpConfText;
-
-		tmpDiscoverBtn.onclick = () =>
-		{
-			let tmpBN = tmpSrc.values()[0];
-			let tmpCH = tmpSrc.values()[1];
-			let tmpEN = tmpSrc.values()[2];
-			if (!tmpBN || !tmpCH || !tmpEN)
+		this._confirm(
+			'Delete mapping "' + tmpLabel + '"? This cannot be undone.',
+			{ title: 'Delete mapping?', confirmLabel: 'Delete', cancelLabel: 'Cancel', dangerous: true })
+			.then((pOk) =>
 			{
-				tmpDiscoverStatus.textContent = 'fill source Beacon, Connection, Entity first';
-				tmpDiscoverStatus.style.color = '#fbbf24';
-				return;
+				if (!pOk) return;
+				this._API.deleteMapping(tmpID).then(() =>
+				{
+					this._toast('Mapping deleted.', 'success');
+					this._loadList();
+				}).catch((pErr) => this._toast('Delete failed: ' + pErr.message, 'error'));
+			});
+	}
+
+	onScopeInput(pValue)
+	{
+		clearTimeout(this._scopeDebounce);
+		let tmpValue = (pValue == null) ? '' : String(pValue).trim();
+		this._scopeDebounce = setTimeout(() =>
+		{
+			this._API.setScope(tmpValue);
+			this.pict.AppData.Mapping.Scope = tmpValue;
+			this.pict.AppData.Mapping.View = 'list';
+			this.pict.AppData.Mapping.Editing = null;
+			this._loadList();
+		}, 300);
+	}
+
+	setEditingField(pName, pValue)
+	{
+		if (!this.pict.AppData.Mapping.Editing) return;
+		this.pict.AppData.Mapping.Editing[pName] = pValue;
+		// Silent — no render(), preserves cursor/selection state.
+	}
+
+	refresh()
+	{
+		this._loadList();
+	}
+
+	// ── Internal ─────────────────────────────────────────────────────
+
+	_loadList()
+	{
+		this.pict.AppData.Mapping.View = 'list';
+		this.pict.AppData.Mapping.LoadState = 'loading';
+		this.pict.AppData.Mapping.LoadErrorMessage = '';
+		this.render();
+
+		this._API.listMappings().then((pData) =>
+		{
+			let tmpRows = (pData && pData.Mappings) || [];
+			this.pict.AppData.Mapping.Mappings = tmpRows;
+			if (tmpRows.length === 0)
+			{
+				let tmpScope = this._API.getScope();
+				this.pict.AppData.Mapping.LoadState = 'empty';
+				this.pict.AppData.Mapping.EmptyMessage = 'No mappings in '
+					+ (tmpScope === '' ? 'global scope' : ('scope "' + tmpScope + '"'))
+					+ '. Use scope=* to see all.';
 			}
-			tmpDiscoverStatus.textContent = 'introspecting…';
-			tmpDiscoverStatus.style.color = '#94a3b8';
-			tmpChipBar.innerHTML = '';
-			tmpChipBar.style.display = 'none';
-			this._API.listSourceColumns(tmpBN, tmpCH, tmpEN).then((pResult) =>
+			else
 			{
-				let tmpCols = (pResult && pResult.Columns) || [];
-				if (tmpCols.length === 0)
-				{
-					tmpDiscoverStatus.textContent = 'no columns returned';
-					tmpDiscoverStatus.style.color = '#fbbf24';
-					return;
-				}
-				tmpDiscoverStatus.textContent = 'click a chip to insert {~D:Record.<col>~} at the cursor';
-				tmpDiscoverStatus.style.color = '#86efac';
-				tmpChipBar.style.display = 'flex';
-				for (let i = 0; i < tmpCols.length; i++)
-				{
-					let tmpCol = tmpCols[i];
-					let tmpChip = document.createElement('a');
-					tmpChip.className = 'psm-chip';
-					tmpChip.href = 'javascript:void(0)';
-					tmpChip.textContent = tmpCol.Name + (tmpCol.DataType ? (' :' + tmpCol.DataType) : '');
-					tmpChip.title = 'Insert "' + tmpCol.Name + '": "{~D:Record.' + tmpCol.Name + '~}", at cursor';
-					tmpChip.onclick = () =>
-					{
-						let tmpSnippet = '"' + tmpCol.Name + '": "{~D:Record.' + tmpCol.Name + '~}",';
-						let tmpStart = tmpConfTA.selectionStart || 0;
-						let tmpEnd   = tmpConfTA.selectionEnd   || 0;
-						let tmpVal   = tmpConfTA.value;
-						tmpConfTA.value = tmpVal.slice(0, tmpStart) + tmpSnippet + tmpVal.slice(tmpEnd);
-						let tmpCaret = tmpStart + tmpSnippet.length;
-						tmpConfTA.focus();
-						tmpConfTA.setSelectionRange(tmpCaret, tmpCaret);
-					};
-					tmpChipBar.appendChild(tmpChip);
-				}
-			}).catch((pErr) =>
-			{
-				tmpDiscoverStatus.textContent = 'failed: ' + pErr.message;
-				tmpDiscoverStatus.style.color = '#fca5a5';
-			});
-		};
-
-		let tmpConfHelp = document.createElement('div');
-		tmpConfHelp.className = 'psm-help';
-		tmpConfHelp.innerHTML = 'meadow-integration shape: <code>{ Entity, GUIDName, GUIDTemplate, Mappings: { TargetField: "{~D:Record.SourceField~}" }, Solvers }</code>.';
-		tmpConfWrap.appendChild(tmpConfTA); tmpConfWrap.appendChild(tmpConfHelp);
-		tmpForm.appendChild(tmpConfLbl); tmpForm.appendChild(tmpConfWrap);
-
-		tmpWrap.appendChild(tmpForm);
-
-		let tmpErrBox = document.createElement('div');
-		tmpErrBox.className = 'psm-editor-error'; tmpErrBox.style.display = 'none';
-		tmpWrap.appendChild(tmpErrBox);
-
-		let tmpActions = document.createElement('div'); tmpActions.className = 'psm-editor-actions';
-		let tmpCancel = document.createElement('a');
-		tmpCancel.className = 'psm-btn'; tmpCancel.textContent = 'Cancel';
-		tmpCancel.href = 'javascript:void(0)'; tmpCancel.onclick = () => this.openList();
-		tmpActions.appendChild(tmpCancel);
-
-		let tmpSave = document.createElement('a');
-		tmpSave.className = 'psm-btn psm-btn-primary';
-		tmpSave.textContent = tmpIsNew ? 'Create mapping' : 'Save changes';
-		tmpSave.href = 'javascript:void(0)';
-		tmpSave.onclick = () =>
+				this.pict.AppData.Mapping.LoadState = 'ready';
+			}
+			this.render();
+		}).catch((pErr) =>
 		{
-			let tmpName = tmpNameInput.value.trim();
-			if (!tmpName) { this._showEditorError(tmpErrBox, 'Name is required.'); return; }
-			let tmpConfRaw = tmpConfTA.value;
-			let tmpConfParsed;
-			try { tmpConfParsed = JSON.parse(tmpConfRaw); }
-			catch (pErr) { this._showEditorError(tmpErrBox, 'Configuration JSON parse error: ' + pErr.message); return; }
-
-			let tmpRecord = {
-				Name:                  tmpName,
-				Scope:                 tmpScopeInput.value.trim(),
-				Description:           tmpDescInput.value,
-				SourceBeaconName:      tmpSrc.values()[0],
-				SourceConnectionHash:  tmpSrc.values()[1],
-				SourceEntity:          tmpSrc.values()[2],
-				TargetBeaconName:      tmpTgt.values()[0],
-				TargetConnectionHash:  tmpTgt.values()[1],
-				TargetEntity:          tmpTgt.values()[2],
-				MappingConfiguration:  tmpConfParsed
-			};
-			if (!tmpIsNew && tmpRec.IDMappingConfig) tmpRecord.IDMappingConfig = tmpRec.IDMappingConfig;
-
-			tmpSave.textContent = 'Saving…';
-			this._API.saveMapping(tmpRecord).then(() =>
-			{
-				this._toast(tmpIsNew ? 'Mapping created.' : 'Mapping saved.', 'success');
-				this.openList();
-			}).catch((pErr) =>
-			{
-				tmpSave.textContent = tmpIsNew ? 'Create mapping' : 'Save changes';
-				this._showEditorError(tmpErrBox, pErr.message);
-			});
-		};
-		tmpActions.appendChild(tmpSave);
-		tmpWrap.appendChild(tmpActions);
-
-		pHost.appendChild(tmpWrap);
+			this.pict.AppData.Mapping.LoadState = 'error';
+			this.pict.AppData.Mapping.LoadErrorMessage = pErr.message || String(pErr);
+			this.render();
+		});
 	}
 
-	_buildSTSection(pTitle, pFieldNames, pLabels, pValues)
+	_openEditorWith(pRec)
 	{
-		let tmpSection = document.createElement('div'); tmpSection.className = 'psm-st-section';
-		let tmpHead = document.createElement('h4'); tmpHead.textContent = pTitle;
-		tmpSection.appendChild(tmpHead);
-		let tmpInputs = [];
-		for (let i = 0; i < pFieldNames.length; i++)
-		{
-			let tmpRow = document.createElement('div'); tmpRow.className = 'psm-st-row';
-			let tmpLabel = document.createElement('label'); tmpLabel.textContent = pLabels[i];
-			let tmpInput = document.createElement('input'); tmpInput.type = 'text';
-			tmpInput.value = pValues[i] || '';
-			tmpInput.placeholder = pFieldNames[i];
-			tmpRow.appendChild(tmpLabel); tmpRow.appendChild(tmpInput);
-			tmpSection.appendChild(tmpRow);
-			tmpInputs.push(tmpInput);
-		}
-		return { section: tmpSection, values: () => tmpInputs.map((i) => i.value.trim()) };
+		let tmpScope = this._API.getScope();
+		let tmpEditing = pRec
+			? Object.assign({}, pRec, {
+				MappingConfiguration: (typeof pRec.MappingConfiguration === 'string')
+					? pRec.MappingConfiguration
+					: JSON.stringify(pRec.MappingConfiguration || {}, null, 2)
+			})
+			: {
+				Scope: tmpScope,
+				Name: '', Description: '',
+				SourceBeaconName: '', SourceConnectionHash: '', SourceEntity: '',
+				TargetBeaconName: '', TargetConnectionHash: '', TargetEntity: '',
+				MappingConfiguration: DEFAULT_MAPPING_CONFIGURATION_TEXT
+			};
+
+		this.pict.AppData.Mapping.Editing = tmpEditing;
+		this.pict.AppData.Mapping.EditorError = '';
+		this.pict.AppData.Mapping.View = 'edit';
+		this.render();
 	}
 
-	_showEditorError(pBox, pMsg) { pBox.textContent = pMsg; pBox.style.display = ''; }
+	_setEditorError(pMessage)
+	{
+		this.pict.AppData.Mapping.EditorError = pMessage || '';
+		this.render();
+	}
+
+	_populateSlots()
+	{
+		let tmpData = this.pict.AppData.Mapping;
+		let tmpView = tmpData.View || 'list';
+		let tmpMode = tmpData.Mode || 'manage';
+		let tmpShowToolbar = !!tmpData.ShowToolbar;
+
+		tmpData.Scope = this._API.getScope();
+
+		tmpData.ToolbarSlot   = tmpShowToolbar ? [{}] : [];
+		tmpData.BackLinkSlot  = (tmpView !== 'list') ? [{}] : [];
+		tmpData.NewButtonSlot = (tmpMode === 'manage' && tmpView === 'list') ? [{}] : [];
+
+		tmpData.ListSlot = (tmpView === 'list') ? [{}] : [];
+		tmpData.EditSlot = (tmpView === 'edit' && tmpData.Editing) ? [this._buildEditorRecord(tmpData.Editing, tmpData.EditorError)] : [];
+
+		let tmpState = (tmpView === 'list') ? (tmpData.LoadState || 'idle') : 'hidden';
+		tmpData.LoadingSlot   = (tmpState === 'loading') ? [{}] : [];
+		tmpData.LoadErrorSlot = (tmpState === 'error') ? [{ Message: tmpData.LoadErrorMessage }] : [];
+		tmpData.EmptySlot     = (tmpState === 'empty') ? [{ Message: tmpData.EmptyMessage }] : [];
+		tmpData.ListBodySlot  = (tmpState === 'ready') ? [{}] : [];
+
+		if (tmpState === 'ready')
+		{
+			tmpData.Mappings = (tmpData.Mappings || []).map((m) => this._decorateMapping(m, tmpMode, tmpData.RunResults));
+		}
+	}
+
+	_decorateMapping(pMapping, pMode, pRunResults)
+	{
+		let tmpID = pMapping.IDMappingConfig;
+		let tmpRunResult = pRunResults && pRunResults[tmpID] ? pRunResults[tmpID] : null;
+
+		return Object.assign({}, pMapping,
+			{
+				NameOrUnnamed:        pMapping.Name || '(unnamed)',
+				SourceLabel:          (pMapping.SourceBeaconName || '?') + '/' + (pMapping.SourceEntity || '?'),
+				TargetLabel:          (pMapping.TargetBeaconName || '?') + '/' + (pMapping.TargetEntity || '?'),
+				ScopeBadgeSlot:       pMapping.Scope ? [{ Scope: pMapping.Scope }] : [],
+				ActionsSlot:          (pMode === 'manage') ? this._buildRowActions(tmpID, tmpRunResult) : [],
+				ResultSlot:           tmpRunResult ? [this._buildRunResultRecord(tmpRunResult)] : []
+			});
+	}
+
+	_buildRowActions(pID, pRunResult)
+	{
+		let tmpRunning = pRunResult && pRunResult.Status === 'Running';
+		return [
+			{ IDMappingConfig: pID, Method: 'runMapping',    Label: tmpRunning ? 'Running…' : '▶ Run', ButtonClass: tmpRunning ? 'psm-btn-success psm-btn-disabled' : 'psm-btn-success' },
+			{ IDMappingConfig: pID, Method: 'openEditor',    Label: 'Edit',     ButtonClass: '' },
+			{ IDMappingConfig: pID, Method: 'deleteMapping', Label: 'Delete',   ButtonClass: 'psm-btn-danger' }
+		];
+	}
+
+	_buildRunResultRecord(pRunResult)
+	{
+		let tmpStatus = pRunResult.Status || 'Success';
+		let tmpStats = [];
+		if (tmpStatus === 'Success')
+		{
+			for (let i = 0; i < RUN_STAT_FIELDS.length; i++)
+			{
+				let tmpKey = RUN_STAT_FIELDS[i];
+				if (pRunResult[tmpKey] === undefined || pRunResult[tmpKey] === null) continue;
+				tmpStats.push({ Label: tmpKey, Value: String(pRunResult[tmpKey]) });
+			}
+		}
+
+		let tmpName = pRunResult.Hash || '(mapping)';
+		let tmpTitle = (tmpStatus === 'Error') ? ('✗  ' + tmpName + ' — failed')
+			: (tmpStatus === 'Running') ? ('… ' + tmpName + ' — running')
+			: ('✓  ' + tmpName + ' — completed');
+		let tmpStatusClass = (tmpStatus === 'Error') ? 'psm-run-error'
+			: (tmpStatus === 'Running') ? 'psm-run-running'
+			: 'psm-run-success';
+		let tmpErrorSlot = (tmpStatus === 'Error' && pRunResult.Error)
+			? [{ Message: pRunResult.Error }]
+			: [];
+
+		return {
+			Title:        tmpTitle,
+			StatusClass:  tmpStatusClass,
+			Stats:        tmpStats,
+			ErrorSlot:    tmpErrorSlot
+		};
+	}
+
+	_buildEditorRecord(pEditing, pErrorMessage)
+	{
+		let tmpIsNew = !pEditing.IDMappingConfig;
+		let tmpSourceFields = SOURCE_EDITOR_FIELDS.map((f) =>
+			({ Field: f.Field, Label: f.Label, Value: pEditing[f.Field] || '' }));
+		let tmpTargetFields = TARGET_EDITOR_FIELDS.map((f) =>
+			({ Field: f.Field, Label: f.Label, Value: pEditing[f.Field] || '' }));
+
+		return {
+			HeaderTitle:           tmpIsNew ? 'New mapping' : ('Edit mapping "' + (pEditing.Name || pEditing.IDMappingConfig) + '"'),
+			Name:                  pEditing.Name || '',
+			Scope:                 pEditing.Scope || '',
+			Description:           pEditing.Description || '',
+			SourceFields:          tmpSourceFields,
+			TargetFields:          tmpTargetFields,
+			MappingConfiguration:  pEditing.MappingConfiguration || '',
+			SaveButtonLabel:       tmpIsNew ? 'Create mapping' : 'Save changes',
+			ErrorSlot:             pErrorMessage ? [{ Message: pErrorMessage }] : []
+		};
+	}
+
+	// ── Modal ────────────────────────────────────────────────────────
+
+	_modal()
+	{
+		if (!this.pict || !this.pict.views) return null;
+		return this.pict.views['Pict-Section-Modal']
+			|| this.pict.views.Modal
+			|| null;
+	}
+
+	_confirm(pMessage, pOptions)
+	{
+		let tmpModal = this._modal();
+		if (tmpModal && typeof tmpModal.confirm === 'function')
+		{
+			return tmpModal.confirm(pMessage, pOptions);
+		}
+		this.log.warn('Pict-Section-Mapping: pict-section-modal not present; auto-confirming "' + pMessage + '"');
+		return Promise.resolve(true);
+	}
+
+	_toast(pMessage, pType)
+	{
+		let tmpModal = this._modal();
+		if (tmpModal && typeof tmpModal.toast === 'function')
+		{
+			tmpModal.toast(pMessage, { type: pType || 'info' });
+			return;
+		}
+		this.log.info('[pict-section-mapping] ' + pMessage);
+	}
 }
 
-PictSectionMapping.default_configuration = Object.assign({}, libDefaultConf,
-	{
-		Templates:
-		[
-			{ Hash: 'Pict-Section-Mapping-Shell', Template: '<div class="psm-shell-anchor"></div>' }
-		],
-		Renderables:
-		[
-			{ RenderableHash: 'Pict-Section-Mapping-Shell', TemplateHash: 'Pict-Section-Mapping-Shell',
-				ContentDestinationAddress: libDefaultConf.DefaultDestinationAddress }
-		]
-	});
-
 module.exports = PictSectionMapping;
-module.exports.default_configuration = PictSectionMapping.default_configuration;
+module.exports.default_configuration = libDefaultConf;
 module.exports.APIProvider = libAPIProvider;
+module.exports.DEFAULT_MAPPING_CONFIGURATION = DEFAULT_MAPPING_CONFIGURATION;

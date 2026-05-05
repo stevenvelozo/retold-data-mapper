@@ -1,10 +1,14 @@
 /**
  * Pict-Section-Mapping API Provider
  *
- * REST client for the data-mapper /mapper/mappings* surface.
+ * REST client for the data-mapper /mapper/mapping* surface.
  * Uses the same active-scope localStorage key as the dashboard
  * and operation sections so a host mounting any combination
  * of them gets one coherent active scope.
+ *
+ * Bearer-token write gate: when WriteToken is set, POST/PUT/DELETE
+ * carry `Authorization: Bearer <token>` to satisfy the data-mapper's
+ * DATA_MAPPER_WRITE_TOKEN env-driven gate. GET stays open.
  */
 'use strict';
 
@@ -17,38 +21,60 @@ class MappingAPIProvider
 		let tmpOptions = pOptions || {};
 		this._apiBaseUrl = tmpOptions.APIBaseUrl || '/mapper';
 		this._scopeOverride = (typeof tmpOptions.Scope === 'string') ? tmpOptions.Scope : null;
+		this._writeToken = (typeof tmpOptions.WriteToken === 'string' && tmpOptions.WriteToken.length > 0)
+			? tmpOptions.WriteToken : null;
 	}
 
 	getScope(pCallScope)
 	{
 		if (typeof pCallScope === 'string') return pCallScope;
 		if (typeof this._scopeOverride === 'string') return this._scopeOverride;
-		if (typeof localStorage !== 'undefined')
+		try
 		{
-			let tmpStored = localStorage.getItem(SCOPE_STORAGE_KEY);
-			if (tmpStored !== null) return tmpStored;
+			if (typeof localStorage !== 'undefined')
+			{
+				let tmpStored = localStorage.getItem(SCOPE_STORAGE_KEY);
+				if (tmpStored !== null) return tmpStored;
+			}
 		}
+		catch (pErr) { /* opaque origin or disabled storage — fall through */ }
 		return '';
 	}
 
 	setScope(pScope)
 	{
-		if (typeof localStorage !== 'undefined')
+		try
 		{
-			if (pScope) localStorage.setItem(SCOPE_STORAGE_KEY, pScope);
-			else localStorage.removeItem(SCOPE_STORAGE_KEY);
+			if (typeof localStorage !== 'undefined')
+			{
+				if (pScope) localStorage.setItem(SCOPE_STORAGE_KEY, pScope);
+				else localStorage.removeItem(SCOPE_STORAGE_KEY);
+			}
 		}
+		catch (pErr) { /* opaque origin or disabled storage — keep in-memory only */ }
 		this._scopeOverride = (typeof pScope === 'string') ? pScope : null;
+	}
+
+	setWriteToken(pToken)
+	{
+		this._writeToken = (typeof pToken === 'string' && pToken.length > 0) ? pToken : null;
 	}
 
 	_fetch(pMethod, pPath, pBody)
 	{
 		let tmpOpts = { method: pMethod, headers: {} };
+		let tmpIsWrite = (pMethod !== 'GET' && pMethod !== 'HEAD');
+
 		if (pBody !== undefined && pBody !== null)
 		{
 			tmpOpts.headers['Content-Type'] = 'application/json';
 			tmpOpts.body = JSON.stringify(pBody);
 		}
+		if (tmpIsWrite && this._writeToken)
+		{
+			tmpOpts.headers['Authorization'] = 'Bearer ' + this._writeToken;
+		}
+
 		return fetch(this._apiBaseUrl + pPath, tmpOpts).then((pRes) =>
 		{
 			if (!pRes.ok)
@@ -72,7 +98,15 @@ class MappingAPIProvider
 		return '?scope=' + encodeURIComponent(tmpScope);
 	}
 
-	listMappings(pScope) { return this._fetch('GET', '/mappings' + this._scopeQuery(pScope)); }
+	listMappings(pScope)
+	{
+		return this._fetch('GET', '/mappings' + this._scopeQuery(pScope));
+	}
+
+	getMapping(pHashOrID, pScope)
+	{
+		return this._fetch('GET', '/mapping/' + encodeURIComponent(pHashOrID) + this._scopeQuery(pScope));
+	}
 
 	saveMapping(pRecord, pScope)
 	{
@@ -87,21 +121,31 @@ class MappingAPIProvider
 		return this._fetch('POST', '/mappings', tmpRecord);
 	}
 
-	deleteMapping(pID) { return this._fetch('DELETE', '/mapping/' + pID); }
-
-	// Phase B "glue": compile this mapping into an Ultravisor Operation,
-	// POST it to UV, trigger via the queue, and return the manifest summary.
-	// Server side does the compile + post + trigger; UI just renders the result.
-	runViaUltravisor(pID) { return this._fetch('POST', '/uv/run-mapping/' + pID, {}); }
-
-	// Phase C: introspection-driven authoring. Fetch the columns for one
-	// entity on a source beacon so the editor can render them as
-	// click-to-insert chips. Server handles the hash→ID resolution.
-	listSourceColumns(pBeaconName, pConnectionHash, pEntity)
+	deleteMapping(pID)
 	{
-		let tmpQuery = '?ConnectionHash=' + encodeURIComponent(pConnectionHash) +
-			'&Entity=' + encodeURIComponent(pEntity);
-		return this._fetch('GET', '/beacon/' + encodeURIComponent(pBeaconName) + '/columns' + tmpQuery);
+		return this._fetch('DELETE', '/mapping/' + pID);
+	}
+
+	// Run goes through UV — server route is /mapper/uv/run-mapping/:id.
+	// The previous implementation pointed at /mapping/:id/run which never
+	// existed; runs always returned 404.
+	runMapping(pID)
+	{
+		return this._fetch('POST', '/uv/run-mapping/' + pID, {});
+	}
+
+	// Lake-sample peek for editor convenience — render five rows from a
+	// beacon/connection/entity tuple.
+	peekTable(pBeaconName, pConnectionHash, pEntity, pPageSize, pPage)
+	{
+		return this._fetch('POST', '/dashboard/panel-data',
+			{
+				BeaconName:     pBeaconName,
+				ConnectionName: pConnectionHash,
+				Endpoint:       pEntity,
+				PageSize:       pPageSize || 5,
+				Page:           pPage || 0
+			});
 	}
 }
 

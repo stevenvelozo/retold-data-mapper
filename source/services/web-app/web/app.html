@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Retold Data Mapper</title>
+	<style id="PICT-CSS"></style>
+	<style>
+		html, body { background: #0e1a2b; margin: 0; padding: 0; min-height: 100vh; }
+		body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #f8fafc; }
+		#MapperShell { min-height: 100vh; }
+	</style>
+</head>
+<body>
+
+<div id="MapperShell">
+	<div style="padding:40px;text-align:center;color:#64748b;">Loading mapper…</div>
+</div>
+
+<script src="/pict.min.js" type="text/javascript"></script>
+<script src="retold-data-mapper.js" type="text/javascript"></script>
+<script type="text/javascript">
+	// Cohesive MapperShell — single-page tabbed UI mounting all four
+	// mapper sections (Connections, Mappings, Operations, Dashboards)
+	// behind one shared scope picker. The per-section URLs (/mappings,
+	// /operations, /dashboards) continue to work unchanged for
+	// back-compat and direct embedding into other apps.
+	Pict.safeLoadPictApplication(MapperShellApplication, 2);
+</script>
+</body>
+</html>
