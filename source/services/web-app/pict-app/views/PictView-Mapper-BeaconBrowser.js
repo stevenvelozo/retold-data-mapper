@@ -31,15 +31,18 @@ const _ViewConfiguration =
 	<div class="mapper-section-title">Beacon &amp; Entity Selection</div>
 	<div class="bb-row">
 		<span class="bb-label">Source</span>
-		<select id="DataMapper-Source-Beacon">
+		<select id="DataMapper-Source-Beacon"
+			onchange="_Pict.views['Mapper-BeaconBrowser'].onSourceBeacon(this.value)">
 			<option value="">— beacon —</option>
 			{~TS:Mapper-BeaconBrowser-BeaconOpt:AppData.Mapper.SourceBeacons~}
 		</select>
-		<select id="DataMapper-Source-Connection">
+		<select id="DataMapper-Source-Connection"
+			onchange="_Pict.views['Mapper-BeaconBrowser'].onSourceConnection(this.value)">
 			<option value="">— connection —</option>
 			{~TS:Mapper-BeaconBrowser-ConnOpt:AppData.Mapper.SourceConnectionsForTemplate~}
 		</select>
-		<select id="DataMapper-Source-Entity">
+		<select id="DataMapper-Source-Entity"
+			onchange="_Pict.views['Mapper-BeaconBrowser'].onSourceEntity(this.value)">
 			<option value="">— entity —</option>
 			{~TS:Mapper-BeaconBrowser-EntityOpt:AppData.Mapper.SourceEntitiesForTemplate~}
 		</select>
@@ -47,15 +50,18 @@ const _ViewConfiguration =
 	<div class="bb-divider"></div>
 	<div class="bb-row">
 		<span class="bb-label">Target</span>
-		<select id="DataMapper-Target-Beacon">
+		<select id="DataMapper-Target-Beacon"
+			onchange="_Pict.views['Mapper-BeaconBrowser'].onTargetBeacon(this.value)">
 			<option value="">— beacon —</option>
 			{~TS:Mapper-BeaconBrowser-BeaconOpt:AppData.Mapper.TargetBeacons~}
 		</select>
-		<select id="DataMapper-Target-Connection">
+		<select id="DataMapper-Target-Connection"
+			onchange="_Pict.views['Mapper-BeaconBrowser'].onTargetConnection(this.value)">
 			<option value="">— connection —</option>
 			{~TS:Mapper-BeaconBrowser-ConnOpt:AppData.Mapper.TargetConnectionsForTemplate~}
 		</select>
-		<select id="DataMapper-Target-Entity">
+		<select id="DataMapper-Target-Entity"
+			onchange="_Pict.views['Mapper-BeaconBrowser'].onTargetEntity(this.value)">
 			<option value="">— entity —</option>
 			{~TS:Mapper-BeaconBrowser-EntityOpt:AppData.Mapper.TargetEntitiesForTemplate~}
 		</select>
@@ -94,46 +100,20 @@ class PictViewMapperBeaconBrowser extends libPictView
 		super(pFable, pOptions, pServiceHash);
 	}
 
-	onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent)
-	{
-		let tmpProvider = this.pict.providers.MapperAPI;
+	// ── Inline-handler dispatchers (called from <select onchange="…">) ──
+	//
+	// Per modules/pict/CLAUDE.md, listeners attached via addEventListener
+	// in `onAfterRender` get thrown away on the next render(); inline
+	// `onchange=` handlers in the template HTML survive every re-render
+	// because they live in the template-emitted markup. Wire each select's
+	// onchange directly to one of these methods.
 
-		let fBindChange = (pSelector, fHandler) =>
-		{
-			let tmpEl = this.pict.ContentAssignment.getElement(pSelector);
-			if (tmpEl && tmpEl.length) tmpEl[0].addEventListener('change', fHandler);
-		};
-
-		fBindChange('#DataMapper-Source-Beacon', (pEvent) =>
-		{
-			tmpProvider.loadSourceConnections(pEvent.target.value);
-		});
-		fBindChange('#DataMapper-Source-Connection', (pEvent) =>
-		{
-			let tmpID = parseInt(pEvent.target.value, 10);
-			if (tmpID) { tmpProvider.introspectSource(tmpID); }
-		});
-		fBindChange('#DataMapper-Source-Entity', (pEvent) =>
-		{
-			tmpProvider.setSourceEntity(pEvent.target.value);
-		});
-
-		fBindChange('#DataMapper-Target-Beacon', (pEvent) =>
-		{
-			tmpProvider.loadTargetConnections(pEvent.target.value);
-		});
-		fBindChange('#DataMapper-Target-Connection', (pEvent) =>
-		{
-			let tmpID = parseInt(pEvent.target.value, 10);
-			if (tmpID) { tmpProvider.introspectTarget(tmpID); }
-		});
-		fBindChange('#DataMapper-Target-Entity', (pEvent) =>
-		{
-			tmpProvider.setTargetEntity(pEvent.target.value);
-		});
-
-		return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
-	}
+	onSourceBeacon(pValue)     { this.pict.providers.MapperAPI.loadSourceConnections(pValue); }
+	onSourceConnection(pValue) { let tmpID = parseInt(pValue, 10); if (tmpID) this.pict.providers.MapperAPI.introspectSource(tmpID); }
+	onSourceEntity(pValue)     { this.pict.providers.MapperAPI.setSourceEntity(pValue); }
+	onTargetBeacon(pValue)     { this.pict.providers.MapperAPI.loadTargetConnections(pValue); }
+	onTargetConnection(pValue) { let tmpID = parseInt(pValue, 10); if (tmpID) this.pict.providers.MapperAPI.introspectTarget(tmpID); }
+	onTargetEntity(pValue)     { this.pict.providers.MapperAPI.setTargetEntity(pValue); }
 }
 
 module.exports = PictViewMapperBeaconBrowser;

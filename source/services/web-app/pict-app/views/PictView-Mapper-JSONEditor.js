@@ -31,14 +31,18 @@ const _ViewConfiguration =
 	<div class="json-editor-header">
 		<h2>MappingConfiguration JSON</h2>
 		<div class="json-editor-actions">
-			<button class="btn" id="DataMapper-JSON-Regenerate">Regenerate</button>
-			<button class="btn" id="DataMapper-JSON-Apply">Apply to Editor</button>
-			<button class="btn" id="DataMapper-JSON-Copy">Copy</button>
-			<button class="btn" id="DataMapper-JSON-Upload">Upload…</button>
-			<input type="file" id="DataMapper-JSON-File" accept=".json" style="display:none">
+			<button class="btn" onclick="_Pict.views['Mapper-JSONEditor'].onRegenClick()">Regenerate</button>
+			<button class="btn" onclick="_Pict.views['Mapper-JSONEditor'].onApplyClick()">Apply to Editor</button>
+			<button class="btn" onclick="_Pict.views['Mapper-JSONEditor'].onCopyClick()">Copy</button>
+			<button class="btn" onclick="_Pict.views['Mapper-JSONEditor'].onUploadClick()">Upload…</button>
+			<input type="file" id="DataMapper-JSON-File" accept=".json" style="display:none"
+				onchange="_Pict.views['Mapper-JSONEditor'].onFileChange(this)">
 		</div>
 	</div>
-	<textarea id="DataMapper-JSON-Text" placeholder='{ "Entity":"MyEntity", "Mappings":{...} }'>{~D:AppData.Mapper.JSONText~}</textarea>
+	<textarea id="DataMapper-JSON-Text" placeholder='{ "Entity":"MyEntity", "Mappings":{...} }'
+		ondragover="event.preventDefault(); this.classList.add('drop-active');"
+		ondragleave="this.classList.remove('drop-active');"
+		ondrop="_Pict.views['Mapper-JSONEditor'].onTextareaDrop(event, this)">{~D:AppData.Mapper.JSONText~}</textarea>
 </div>`
 				}
 			],
@@ -61,102 +65,91 @@ class PictViewMapperJSONEditor extends libPictView
 		super(pFable, pOptions, pServiceHash);
 	}
 
-	onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent)
+	// ── Inline-handler dispatchers ──────────────────────────────────
+	//
+	// All button clicks, file-input change, and textarea drag/drop wire
+	// through inline attributes in the template HTML — survives every
+	// re-render because the markup itself carries the handler. Per
+	// modules/pict/CLAUDE.md, addEventListener in onAfterRender is banned
+	// (handlers vanish on re-render). Drag/drop has inline equivalents
+	// (ondragover/ondragleave/ondrop), so even those are template-side.
+
+	_textarea()
 	{
-		let tmpProvider = this.pict.providers.MapperAPI;
-		let tmpSelf = this;
+		let tmpEl = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Text');
+		return (tmpEl && tmpEl.length) ? tmpEl[0] : null;
+	}
 
-		let tmpTextareaEl = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Text');
-		let tmpTextarea = (tmpTextareaEl && tmpTextareaEl.length) ? tmpTextareaEl[0] : null;
+	onRegenClick()
+	{
+		this.pict.providers.MapperAPI._regenerateJSON();
+		let tmpTextarea = this._textarea();
+		if (tmpTextarea) tmpTextarea.value = this.pict.AppData.Mapper.JSONText;
+	}
 
-		let tmpRegenBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Regenerate');
-		if (tmpRegenBtn && tmpRegenBtn.length)
+	onApplyClick()
+	{
+		let tmpTextarea = this._textarea();
+		if (tmpTextarea) this.pict.providers.MapperAPI.applyJSONText(tmpTextarea.value);
+	}
+
+	onCopyClick()
+	{
+		let tmpTextarea = this._textarea();
+		if (!tmpTextarea) return;
+		try
 		{
-			tmpRegenBtn[0].addEventListener('click', () =>
-			{
-				tmpProvider._regenerateJSON();
-				if (tmpTextarea) tmpTextarea.value = tmpSelf.pict.AppData.Mapper.JSONText;
-			});
+			navigator.clipboard.writeText(tmpTextarea.value);
+			this.pict.AppData.Mapper.StatusMessage = 'JSON copied.';
 		}
-
-		let tmpApplyBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Apply');
-		if (tmpApplyBtn && tmpApplyBtn.length)
+		catch (pErr)
 		{
-			tmpApplyBtn[0].addEventListener('click', () =>
-			{
-				if (tmpTextarea) tmpProvider.applyJSONText(tmpTextarea.value);
-			});
+			tmpTextarea.select();
+			document.execCommand('copy');
+			this.pict.AppData.Mapper.StatusMessage = 'JSON copied.';
 		}
+		if (this.pict.views['Mapper-Layout']) this.pict.views['Mapper-Layout'].render();
+	}
 
-		let tmpCopyBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Copy');
-		if (tmpCopyBtn && tmpCopyBtn.length)
+	onUploadClick()
+	{
+		// Programmatically click the hidden file input so the browser
+		// opens its native file-picker dialog. The picker fires onchange
+		// when the user picks a file — handled by onFileChange below.
+		let tmpEl = this.pict.ContentAssignment.getElement('#DataMapper-JSON-File');
+		if (tmpEl && tmpEl.length) tmpEl[0].click();
+	}
+
+	onFileChange(pInputEl)
+	{
+		let tmpFile = pInputEl && pInputEl.files && pInputEl.files[0];
+		if (!tmpFile) return;
+		let _self = this;
+		let tmpReader = new FileReader();
+		tmpReader.onload = (pLoadEvent) =>
 		{
-			tmpCopyBtn[0].addEventListener('click', () =>
-			{
-				if (!tmpTextarea) return;
-				try
-				{
-					navigator.clipboard.writeText(tmpTextarea.value);
-					tmpSelf.pict.AppData.Mapper.StatusMessage = 'JSON copied.';
-				}
-				catch (e)
-				{
-					tmpTextarea.select();
-					document.execCommand('copy');
-					tmpSelf.pict.AppData.Mapper.StatusMessage = 'JSON copied.';
-				}
-				if (tmpSelf.pict.views['Mapper-Layout']) tmpSelf.pict.views['Mapper-Layout'].render();
-			});
-		}
+			let tmpTextarea = _self._textarea();
+			if (tmpTextarea) tmpTextarea.value = pLoadEvent.target.result;
+			_self.pict.providers.MapperAPI.applyJSONText(pLoadEvent.target.result);
+		};
+		tmpReader.readAsText(tmpFile);
+		pInputEl.value = '';
+	}
 
-		let tmpUploadBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Upload');
-		let tmpFileInputEl = this.pict.ContentAssignment.getElement('#DataMapper-JSON-File');
-		let tmpFileInput = (tmpFileInputEl && tmpFileInputEl.length) ? tmpFileInputEl[0] : null;
-		if (tmpUploadBtn && tmpUploadBtn.length && tmpFileInput)
+	onTextareaDrop(pEvent, pTextareaEl)
+	{
+		pEvent.preventDefault();
+		pTextareaEl.classList.remove('drop-active');
+		let tmpFiles = pEvent.dataTransfer && pEvent.dataTransfer.files;
+		if (!tmpFiles || tmpFiles.length === 0) return;
+		let _self = this;
+		let tmpReader = new FileReader();
+		tmpReader.onload = (pLoadEvent) =>
 		{
-			tmpUploadBtn[0].addEventListener('click', () => tmpFileInput.click());
-			tmpFileInput.addEventListener('change', (pEvent) =>
-			{
-				let tmpFile = pEvent.target.files[0];
-				if (!tmpFile) return;
-				let tmpReader = new FileReader();
-				tmpReader.onload = (pLoadEvent) =>
-				{
-					if (tmpTextarea) tmpTextarea.value = pLoadEvent.target.result;
-					tmpProvider.applyJSONText(pLoadEvent.target.result);
-				};
-				tmpReader.readAsText(tmpFile);
-				pEvent.target.value = '';
-			});
-		}
-
-		if (tmpTextarea)
-		{
-			tmpTextarea.addEventListener('dragover', (pEvent) =>
-			{
-				pEvent.preventDefault();
-				tmpTextarea.classList.add('drop-active');
-			});
-			tmpTextarea.addEventListener('dragleave', () => tmpTextarea.classList.remove('drop-active'));
-			tmpTextarea.addEventListener('drop', (pEvent) =>
-			{
-				pEvent.preventDefault();
-				tmpTextarea.classList.remove('drop-active');
-				let tmpFiles = pEvent.dataTransfer.files;
-				if (tmpFiles && tmpFiles.length > 0)
-				{
-					let tmpReader = new FileReader();
-					tmpReader.onload = (pLoadEvent) =>
-					{
-						tmpTextarea.value = pLoadEvent.target.result;
-						tmpProvider.applyJSONText(pLoadEvent.target.result);
-					};
-					tmpReader.readAsText(tmpFiles[0]);
-				}
-			});
-		}
-
-		return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
+			pTextareaEl.value = pLoadEvent.target.result;
+			_self.pict.providers.MapperAPI.applyJSONText(pLoadEvent.target.result);
+		};
+		tmpReader.readAsText(tmpFiles[0]);
 	}
 }
 

@@ -33,10 +33,10 @@ const _ViewConfiguration =
 <div class="mapping-list">
 	<div class="ml-header">
 		<h2>Saved Mappings</h2>
-		<button class="btn" id="DataMapper-Refresh-Mappings">Refresh</button>
+		<button class="btn" onclick="_Pict.views['Mapper-MappingList'].onRefreshClick()">Refresh</button>
 	</div>
 	{~TS:Mapper-MappingList-Row:AppData.Mapper.SavedMappingsForTemplate~}
-	{~D:AppData.Mapper.SavedMappingsEmptyHTML~}
+	{~TS:Mapper-MappingList-Empty:AppData.Mapper.SavedMappingsEmptySlot~}
 </div>`
 				},
 				{
@@ -47,9 +47,16 @@ const _ViewConfiguration =
 		<div class="ml-name">{~D:Record.Name~}</div>
 		<div class="ml-sub">{~D:Record.Subline~}</div>
 	</div>
-	<button class="btn" data-load-mapping="{~D:Record.IDMappingConfig~}">Load</button>
-	<button class="btn danger" data-delete-mapping="{~D:Record.IDMappingConfig~}">&times;</button>
+	<button class="btn" onclick="_Pict.views['Mapper-MappingList'].onLoadClick({~D:Record.IDMappingConfig~})">Load</button>
+	<button class="btn danger" onclick="_Pict.views['Mapper-MappingList'].onDeleteClick({~D:Record.IDMappingConfig~})">&times;</button>
 </div>`
+				},
+				{
+					// Empty-state placeholder. Driven by a single-element-array
+					// slot rather than an HTML string in AppData, per
+					// modules/pict/CLAUDE.md "AppData stores data, not HTML".
+					Hash: 'Mapper-MappingList-Empty',
+					Template: /*html*/`<div class="ml-empty">No saved mappings yet. Save one from the Visual Mapper tab.</div>`
 				}
 			],
 
@@ -88,50 +95,23 @@ class PictViewMapperMappingList extends libPictView
 			};
 		});
 
-		tmpState.SavedMappingsEmptyHTML = (tmpSaved.length === 0)
-			? '<div class="ml-empty">No saved mappings yet. Save one from the Visual Mapper tab.</div>'
-			: '';
+		tmpState.SavedMappingsEmptySlot = (tmpSaved.length === 0) ? [{}] : [];
 
 		return super.onBeforeRender(pRenderable);
 	}
 
-	onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent)
+	// ── Inline-handler dispatchers (called from template onclick=…) ──
+
+	onRefreshClick()           { this.pict.providers.MapperAPI.loadSavedMappings(); }
+	onLoadClick(pIDMappingConfig)
 	{
-		let tmpProvider = this.pict.providers.MapperAPI;
-
-		let tmpRefreshBtn = this.pict.ContentAssignment.getElement('#DataMapper-Refresh-Mappings');
-		if (tmpRefreshBtn && tmpRefreshBtn.length)
-		{
-			tmpRefreshBtn[0].addEventListener('click', () => tmpProvider.loadSavedMappings());
-		}
-
-		let tmpLoadBtns = this.pict.ContentAssignment.getElement('[data-load-mapping]');
-		if (tmpLoadBtns && tmpLoadBtns.length)
-		{
-			for (let i = 0; i < tmpLoadBtns.length; i++)
-			{
-				tmpLoadBtns[i].addEventListener('click', (pEvent) =>
-				{
-					let tmpID = parseInt(pEvent.currentTarget.getAttribute('data-load-mapping'), 10);
-					if (tmpID) tmpProvider.loadSavedMapping(tmpID);
-				});
-			}
-		}
-
-		let tmpDeleteBtns = this.pict.ContentAssignment.getElement('[data-delete-mapping]');
-		if (tmpDeleteBtns && tmpDeleteBtns.length)
-		{
-			for (let i = 0; i < tmpDeleteBtns.length; i++)
-			{
-				tmpDeleteBtns[i].addEventListener('click', (pEvent) =>
-				{
-					let tmpID = parseInt(pEvent.currentTarget.getAttribute('data-delete-mapping'), 10);
-					if (tmpID) tmpProvider.deleteSavedMapping(tmpID);
-				});
-			}
-		}
-
-		return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
+		let tmpID = parseInt(pIDMappingConfig, 10);
+		if (tmpID) this.pict.providers.MapperAPI.loadSavedMapping(tmpID);
+	}
+	onDeleteClick(pIDMappingConfig)
+	{
+		let tmpID = parseInt(pIDMappingConfig, 10);
+		if (tmpID) this.pict.providers.MapperAPI.deleteSavedMapping(tmpID);
 	}
 }
 

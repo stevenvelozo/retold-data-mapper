@@ -11,6 +11,7 @@
 		"dev": "node test/dev-server.js",
 		"interactive": "node test/harness/interactive.js",
 		"seed": "node test/harness/seed-databases.js",
+		"seed-synth-demo": "node test/harness/seed-synth-demo.js",
 		"harness": "node test/harness/run-harness.js",
 		"build": "npx quack build",
 		"test": "npx quack test",

@@ -65,8 +65,8 @@ const _ViewConfiguration =
 		<div class="mapper-uv-controls">
 			<label style="color:#8b949e; font-size:12px;">Ultravisor</label>
 			<input type="text" id="DataMapper-UV-URL" placeholder="http://localhost:8422" value="{~D:AppData.Mapper.UltravisorURL~}">
-			<button id="DataMapper-UV-Connect">Connect</button>
-			<button id="DataMapper-UV-Disconnect" class="secondary">Disconnect</button>
+			<button onclick="_Pict.views['Mapper-Layout'].onConnectClick()">Connect</button>
+			<button class="secondary" onclick="_Pict.views['Mapper-Layout'].onDisconnectClick()">Disconnect</button>
 			<span class="mapper-badge {~D:AppData.Mapper.UltravisorBadgeClass~}">{~D:AppData.Mapper.UltravisorStatusLabel~}</span>
 		</div>
 		<div class="mapper-status">{~D:AppData.Mapper.StatusMessage~}</div>
@@ -88,7 +88,7 @@ const _ViewConfiguration =
 				},
 				{
 					Hash: 'Mapper-Layout-Tab',
-					Template: /*html*/`<button class="mapper-tab {~D:Record.ActiveClass~}" data-mapper-panel="{~D:Record.Key~}">{~D:Record.Label~}</button>`
+					Template: /*html*/`<button class="mapper-tab {~D:Record.ActiveClass~}" data-mapper-panel="{~D:Record.Key~}" onclick="_Pict.views['Mapper-Layout'].setActivePanel('{~D:Record.Key~}')">{~D:Record.Label~}</button>`
 				}
 			],
 
@@ -123,44 +123,23 @@ class PictViewMapperLayout extends libPictView
 		return super.onBeforeRender(pRenderable);
 	}
 
+	// ── Inline-handler dispatchers (called from template onclick=…) ──
+
+	onConnectClick()
+	{
+		let tmpURLInput = this.pict.ContentAssignment.getElement('#DataMapper-UV-URL');
+		let tmpURL = (tmpURLInput && tmpURLInput.length) ? tmpURLInput[0].value : '';
+		if (!tmpURL) return;
+		this.pict.providers.MapperAPI.connectUltravisor(tmpURL);
+	}
+
+	onDisconnectClick()
+	{
+		this.pict.providers.MapperAPI.disconnectUltravisor();
+	}
+
 	onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent)
 	{
-		let tmpSelf = this;
-
-		let tmpConnectBtn = this.pict.ContentAssignment.getElement('#DataMapper-UV-Connect');
-		if (tmpConnectBtn && tmpConnectBtn.length)
-		{
-			tmpConnectBtn[0].addEventListener('click', () =>
-			{
-				let tmpURLInput = tmpSelf.pict.ContentAssignment.getElement('#DataMapper-UV-URL');
-				let tmpURL = (tmpURLInput && tmpURLInput.length) ? tmpURLInput[0].value : '';
-				if (!tmpURL) { return; }
-				tmpSelf.pict.providers.MapperAPI.connectUltravisor(tmpURL);
-			});
-		}
-
-		let tmpDisconnectBtn = this.pict.ContentAssignment.getElement('#DataMapper-UV-Disconnect');
-		if (tmpDisconnectBtn && tmpDisconnectBtn.length)
-		{
-			tmpDisconnectBtn[0].addEventListener('click', () =>
-			{
-				tmpSelf.pict.providers.MapperAPI.disconnectUltravisor();
-			});
-		}
-
-		let tmpTabButtons = this.pict.ContentAssignment.getElement('[data-mapper-panel]');
-		if (tmpTabButtons && tmpTabButtons.length)
-		{
-			for (let i = 0; i < tmpTabButtons.length; i++)
-			{
-				tmpTabButtons[i].addEventListener('click', (pEvent) =>
-				{
-					let tmpKey = pEvent.currentTarget.getAttribute('data-mapper-panel');
-					if (tmpKey) tmpSelf.setActivePanel(tmpKey);
-				});
-			}
-		}
-
 		// Render sub-views into their mount slots.
 		if (this.pict.views['Mapper-BeaconBrowser']) this.pict.views['Mapper-BeaconBrowser'].render();
 		if (this.pict.views['Mapper-FieldMapper']) this.pict.views['Mapper-FieldMapper'].render();

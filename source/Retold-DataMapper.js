@@ -27,6 +27,14 @@ const libFs = require('fs');
 const libDataMapperConnectionBridge = require('./services/DataMapper-ConnectionBridge.js');
 const libDataMapperBeaconProvider = require('./services/DataMapper-BeaconProvider.js');
 
+// Standalone sub-services exposed on the main service instance so the
+// test suite (and any external caller) can reach them via
+// `mapper.Discovery / .Validator / .SyncEngine / .Reporter`.
+const libDataMapperDiscovery = require('./services/DataMapper-Discovery.js');
+const libDataMapperValidator = require('./services/DataMapper-Validator.js');
+const libDataMapperSyncEngine = require('./services/DataMapper-SyncEngine.js');
+const libDataMapperReporter = require('./services/DataMapper-Reporter.js');
+
 let libUltravisorBeacon = null;
 try
 {
@@ -163,6 +171,16 @@ class RetoldDataMapper extends libFableServiceProviderBase
 		this._UltravisorClient = null;
 		this._UltravisorURL = '';
 		this._UltravisorStatus = 'Disconnected';
+
+		// Standalone sub-services (Discovery / Validator / SyncEngine /
+		// Reporter). Constructed inline rather than going through the
+		// service manager so they're cheap, plain instances reachable
+		// via `mapper.Validator.validate(...)` etc. — matches the test
+		// surface in test/DataMapper_tests.js.
+		this.Discovery = new libDataMapperDiscovery(this.fable);
+		this.Validator = new libDataMapperValidator(this.fable);
+		this.SyncEngine = new libDataMapperSyncEngine(this.fable);
+		this.Reporter = new libDataMapperReporter(this.fable);
 
 		this.serviceInitialized = false;
 	}

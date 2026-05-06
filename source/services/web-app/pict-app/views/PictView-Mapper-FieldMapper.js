@@ -43,7 +43,7 @@ const _ViewConfiguration =
 		<div class="fm-panel-header">Source Fields <span>{~D:AppData.Mapper.SourceFieldCount~}</span></div>
 		<div class="fm-panel-body" id="DataMapper-SourceFields-List">
 			{~TS:Mapper-FieldMapper-SourceField:AppData.Mapper.SourceFieldsForTemplate~}
-			{~D:AppData.Mapper.SourceEmptyHTML~}
+			{~TS:Mapper-FieldMapper-SourceEmpty:AppData.Mapper.SourceEmptySlot~}
 		</div>
 	</div>
 	<div class="fm-panel">
@@ -53,30 +53,42 @@ const _ViewConfiguration =
 			{~TS:Mapper-FieldMapper-MappingRow:AppData.Mapper.MappingsForTemplate~}
 		</div>
 		<div class="fm-footer">
-			<button class="btn primary" id="DataMapper-Save-Mapping">Save Mapping</button>
-			<button class="btn" id="DataMapper-Clear-Mappings">Clear All</button>
+			<button class="btn primary" onclick="_Pict.views['Mapper-FieldMapper'].onSaveClick()">Save Mapping</button>
+			<button class="btn" onclick="_Pict.views['Mapper-FieldMapper'].onClearClick()">Clear All</button>
 		</div>
 	</div>
 	<div class="fm-panel">
 		<div class="fm-panel-header">Target Fields <span>{~D:AppData.Mapper.TargetFieldCount~}</span></div>
 		<div class="fm-panel-body" id="DataMapper-TargetFields-List">
 			{~TS:Mapper-FieldMapper-TargetField:AppData.Mapper.TargetFieldsForTemplate~}
-			{~D:AppData.Mapper.TargetEmptyHTML~}
+			{~TS:Mapper-FieldMapper-TargetEmpty:AppData.Mapper.TargetEmptySlot~}
 		</div>
 	</div>
 </div>`
 				},
 				{
 					Hash: 'Mapper-FieldMapper-SourceField',
-					Template: /*html*/`<div class="fm-field {~D:Record.SelectedClass~}" data-source-field="{~D:Record.Name~}" draggable="true"><span>{~D:Record.Name~}</span><span class="fm-type">{~D:Record.Type~}</span></div>`
+					Template: /*html*/`<div class="fm-field {~D:Record.SelectedClass~}" data-source-field="{~D:Record.Name~}" draggable="true" onclick="_Pict.views['Mapper-FieldMapper'].onSourceClick(this)" ondragstart="_Pict.views['Mapper-FieldMapper'].onSourceDragStart(event, this)"><span>{~D:Record.Name~}</span><span class="fm-type">{~D:Record.Type~}</span></div>`
 				},
 				{
 					Hash: 'Mapper-FieldMapper-TargetField',
-					Template: /*html*/`<div class="fm-field {~D:Record.MappedClass~}" data-target-field="{~D:Record.Name~}"><span>{~D:Record.Name~}</span><span class="fm-type">{~D:Record.Type~}</span></div>`
+					Template: /*html*/`<div class="fm-field {~D:Record.MappedClass~}" data-target-field="{~D:Record.Name~}" onclick="_Pict.views['Mapper-FieldMapper'].onTargetClick(this)" ondragover="event.preventDefault();" ondrop="_Pict.views['Mapper-FieldMapper'].onTargetDrop(event, this)"><span>{~D:Record.Name~}</span><span class="fm-type">{~D:Record.Type~}</span></div>`
 				},
 				{
 					Hash: 'Mapper-FieldMapper-MappingRow',
-					Template: /*html*/`<div class="fm-mapping-row"><span>{~D:Record.Source~}</span><span class="fm-arrow">&rarr;</span><span>{~D:Record.Target~}</span><button class="fm-remove" data-remove-mapping="{~D:Record.Index~}">&times;</button></div>`
+					Template: /*html*/`<div class="fm-mapping-row"><span>{~D:Record.Source~}</span><span class="fm-arrow">&rarr;</span><span>{~D:Record.Target~}</span><button class="fm-remove" onclick="_Pict.views['Mapper-FieldMapper'].onRemoveClick({~D:Record.Index~})">&times;</button></div>`
+				},
+				{
+					// Empty-state placeholder for the source-fields panel.
+					// Driven by a single-element-array slot (SourceEmptySlot)
+					// on AppData rather than an HTML string in AppData —
+					// per modules/pict/CLAUDE.md "AppData stores data, not HTML".
+					Hash: 'Mapper-FieldMapper-SourceEmpty',
+					Template: /*html*/`<div class="fm-empty">Pick a source beacon, connection, and entity above.</div>`
+				},
+				{
+					Hash: 'Mapper-FieldMapper-TargetEmpty',
+					Template: /*html*/`<div class="fm-empty">Pick a target beacon, connection, and entity above.</div>`
 				}
 			],
 
@@ -112,9 +124,9 @@ class PictViewMapperFieldMapper extends libPictView
 					Type: pF.Type || '',
 					SelectedClass: (pF.Name === tmpSelected) ? 'selected' : ''
 				}));
-		tmpState.SourceEmptyHTML = (tmpSources.length === 0)
-			? '<div class="fm-empty">Pick a source beacon, connection, and entity above.</div>'
-			: '';
+		// Single-element-array slot drives the empty-state template via
+		// {~TS:~}; no HTML in AppData per CLAUDE.md.
+		tmpState.SourceEmptySlot = (tmpSources.length === 0) ? [{}] : [];
 
 		let tmpMappings = tmpState.Mappings || [];
 		let tmpMappedTargets = {};
@@ -129,9 +141,7 @@ class PictViewMapperFieldMapper extends libPictView
 					Type: pF.Type || '',
 					MappedClass: tmpMappedTargets[pF.Name] ? 'mapped' : ''
 				}));
-		tmpState.TargetEmptyHTML = (tmpTargets.length === 0)
-			? '<div class="fm-empty">Pick a target beacon, connection, and entity above.</div>'
-			: '';
+		tmpState.TargetEmptySlot = (tmpTargets.length === 0) ? [{}] : [];
 
 		tmpState.MappingCount = `${tmpMappings.length} mapping${tmpMappings.length === 1 ? '' : 's'}`;
 		tmpState.MappingsForTemplate = tmpMappings.map((pM, pIdx) =>
@@ -152,78 +162,49 @@ class PictViewMapperFieldMapper extends libPictView
 		return super.onBeforeRender(pRenderable);
 	}
 
-	onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent)
+	// ── Inline-handler dispatchers (called from template onclick/ondragstart/ondrop=…) ──
+
+	onSourceClick(pFieldEl)
 	{
-		let tmpProvider = this.pict.providers.MapperAPI;
-		let tmpSelf = this;
+		this.pict.providers.MapperAPI.selectSourceField(pFieldEl.getAttribute('data-source-field'));
+	}
 
-		let tmpSourceFields = this.pict.ContentAssignment.getElement('[data-source-field]');
-		if (tmpSourceFields && tmpSourceFields.length)
-		{
-			for (let i = 0; i < tmpSourceFields.length; i++)
-			{
-				let tmpEl = tmpSourceFields[i];
-				tmpEl.addEventListener('click', (pEvent) =>
-				{
-					tmpProvider.selectSourceField(pEvent.currentTarget.getAttribute('data-source-field'));
-				});
-				tmpEl.addEventListener('dragstart', (pEvent) =>
-				{
-					let tmpName = pEvent.currentTarget.getAttribute('data-source-field');
-					pEvent.dataTransfer.setData('text/plain', tmpName);
-					tmpProvider.pict.AppData.Mapper.SelectedSourceField = tmpName;
-				});
-			}
-		}
+	onSourceDragStart(pEvent, pFieldEl)
+	{
+		let tmpName = pFieldEl.getAttribute('data-source-field');
+		pEvent.dataTransfer.setData('text/plain', tmpName);
+		this.pict.AppData.Mapper.SelectedSourceField = tmpName;
+	}
 
-		let tmpTargetFields = this.pict.ContentAssignment.getElement('[data-target-field]');
-		if (tmpTargetFields && tmpTargetFields.length)
-		{
-			for (let i = 0; i < tmpTargetFields.length; i++)
-			{
-				let tmpEl = tmpTargetFields[i];
-				tmpEl.addEventListener('click', (pEvent) =>
-				{
-					let tmpTarget = pEvent.currentTarget.getAttribute('data-target-field');
-					let tmpSource = tmpSelf.pict.AppData.Mapper.SelectedSourceField;
-					if (tmpSource && tmpTarget) { tmpProvider.addMapping(tmpSource, tmpTarget); }
-				});
-				tmpEl.addEventListener('dragover', (pEvent) => pEvent.preventDefault());
-				tmpEl.addEventListener('drop', (pEvent) =>
-				{
-					pEvent.preventDefault();
-					let tmpSource = pEvent.dataTransfer.getData('text/plain');
-					let tmpTarget = pEvent.currentTarget.getAttribute('data-target-field');
-					if (tmpSource && tmpTarget) { tmpProvider.addMapping(tmpSource, tmpTarget); }
-				});
-			}
-		}
+	onTargetClick(pFieldEl)
+	{
+		let tmpTarget = pFieldEl.getAttribute('data-target-field');
+		let tmpSource = this.pict.AppData.Mapper.SelectedSourceField;
+		if (tmpSource && tmpTarget) this.pict.providers.MapperAPI.addMapping(tmpSource, tmpTarget);
+	}
 
-		let tmpRemoveBtns = this.pict.ContentAssignment.getElement('[data-remove-mapping]');
-		if (tmpRemoveBtns && tmpRemoveBtns.length)
-		{
-			for (let i = 0; i < tmpRemoveBtns.length; i++)
-			{
-				tmpRemoveBtns[i].addEventListener('click', (pEvent) =>
-				{
-					let tmpIndex = parseInt(pEvent.currentTarget.getAttribute('data-remove-mapping'), 10);
-					tmpProvider.removeMapping(tmpIndex);
-				});
-			}
-		}
+	onTargetDrop(pEvent, pFieldEl)
+	{
+		pEvent.preventDefault();
+		let tmpSource = pEvent.dataTransfer.getData('text/plain');
+		let tmpTarget = pFieldEl.getAttribute('data-target-field');
+		if (tmpSource && tmpTarget) this.pict.providers.MapperAPI.addMapping(tmpSource, tmpTarget);
+	}
 
-		let tmpSaveBtn = this.pict.ContentAssignment.getElement('#DataMapper-Save-Mapping');
-		if (tmpSaveBtn && tmpSaveBtn.length)
-		{
-			tmpSaveBtn[0].addEventListener('click', () => tmpProvider.saveMapping());
-		}
-		let tmpClearBtn = this.pict.ContentAssignment.getElement('#DataMapper-Clear-Mappings');
-		if (tmpClearBtn && tmpClearBtn.length)
-		{
-			tmpClearBtn[0].addEventListener('click', () => tmpProvider.clearMappings());
-		}
+	onRemoveClick(pIndex)
+	{
+		let tmpIndex = parseInt(pIndex, 10);
+		this.pict.providers.MapperAPI.removeMapping(tmpIndex);
+	}
 
-		return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
+	onSaveClick()
+	{
+		this.pict.providers.MapperAPI.saveMapping();
+	}
+
+	onClearClick()
+	{
+		this.pict.providers.MapperAPI.clearMappings();
 	}
 }
 
