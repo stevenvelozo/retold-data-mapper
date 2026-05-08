@@ -60,7 +60,7 @@
 	border: 1px solid transparent;
 }
 .rdm-nav a.rdm-nav-tab:hover { background: #16213e; color: #f8fafc; }
-.rdm-nav a.rdm-nav-tab.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+.rdm-nav a.rdm-nav-tab.active { background: var(--theme-color-brand-primary-hover, #1d4ed8); color: var(--theme-color-background-panel, #fff); border-color: var(--theme-color-brand-primary-hover, #1d4ed8); }
 .rdm-nav-spacer { flex: 1; }
 `;
 		document.head.appendChild(style);

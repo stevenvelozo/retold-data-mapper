@@ -75,9 +75,9 @@ module.exports = `
 }
 .pso-btn:hover { background: #1e293b; color: var(--pso-fg); }
 .pso-btn.pso-btn-primary { background: var(--pso-accent); border-color: var(--pso-accent); color: var(--pso-accent-fg); }
-.pso-btn.pso-btn-primary:hover { background: #1d4ed8; }
+.pso-btn.pso-btn-primary:hover { background: var(--theme-color-brand-primary-hover, #1d4ed8); }
 .pso-btn.pso-btn-success { background: var(--pso-success); border-color: var(--pso-success); color: var(--pso-success-fg); }
-.pso-btn.pso-btn-success:hover { background: #15803d; }
+.pso-btn.pso-btn-success:hover { background: var(--theme-color-status-success, #15803d); }
 .pso-btn.pso-btn-danger { background: transparent; color: var(--pso-danger-fg); border-color: var(--pso-danger); }
 .pso-btn.pso-btn-danger:hover { background: var(--pso-danger); color: var(--pso-accent-fg); }
 .pso-btn[disabled], .pso-btn.pso-btn-disabled { opacity: 0.5; pointer-events: none; }

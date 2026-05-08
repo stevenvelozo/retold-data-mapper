@@ -61,7 +61,7 @@ const TOPNAV_CSS = /*css*/`
 	border: 1px solid #1e293b;
 }
 .msh-tab:hover { background: #1e293b; color: #f8fafc; }
-.msh-tab.msh-tab-active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+.msh-tab.msh-tab-active { background: var(--theme-color-brand-primary-hover, #1d4ed8); color: var(--theme-color-background-panel, #fff); border-color: var(--theme-color-brand-primary-hover, #1d4ed8); }
 .msh-scope-label { color: #94a3b8; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
 .msh-scope-input
 {

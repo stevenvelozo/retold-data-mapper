@@ -76,7 +76,7 @@ module.exports = `
 }
 .psd-btn:hover { background: #1e293b; color: var(--psd-fg); }
 .psd-btn.psd-btn-primary { background: var(--psd-accent); border-color: var(--psd-accent); color: var(--psd-accent-fg); }
-.psd-btn.psd-btn-primary:hover { background: #1d4ed8; }
+.psd-btn.psd-btn-primary:hover { background: var(--theme-color-brand-primary-hover, #1d4ed8); }
 .psd-btn.psd-btn-danger { background: transparent; color: var(--psd-danger-fg); border-color: var(--psd-danger); }
 .psd-btn.psd-btn-danger:hover { background: var(--psd-danger); color: var(--psd-accent-fg); }
 

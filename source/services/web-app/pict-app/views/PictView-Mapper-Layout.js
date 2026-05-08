@@ -28,14 +28,14 @@ const _ViewConfiguration =
 			.mapper-header h1 { margin: 0; font-size: 16px; font-weight: 600; color: #ff9800; }
 			.mapper-uv-controls { display: flex; gap: 6px; align-items: center; flex: 1; }
 			.mapper-uv-controls input { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 4px 8px; border-radius: 4px; font-size: 13px; min-width: 220px; }
-			.mapper-uv-controls button { background: #238636; color: #fff; border: 0; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+			.mapper-uv-controls button { background: #238636; color: var(--theme-color-background-panel, #fff); border: 0; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
 			.mapper-uv-controls button.secondary { background: #30363d; }
 			.mapper-uv-controls button:hover { filter: brightness(1.15); }
 			.mapper-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
 			.badge-neutral { background: #30363d; color: #8b949e; }
-			.badge-success { background: #238636; color: #fff; }
-			.badge-error { background: #da3633; color: #fff; }
-			.badge-info { background: #1f6feb; color: #fff; }
+			.badge-success { background: #238636; color: var(--theme-color-background-panel, #fff); }
+			.badge-error { background: #da3633; color: var(--theme-color-background-panel, #fff); }
+			.badge-info { background: #1f6feb; color: var(--theme-color-background-panel, #fff); }
 			.mapper-status { color: #8b949e; font-size: 12px; }
 			.mapper-tabs { background: #161b22; border-bottom: 1px solid #30363d; padding: 0 20px; display: flex; gap: 2px; }
 			.mapper-tab { background: transparent; border: 0; color: #8b949e; padding: 10px 16px; cursor: pointer; font-size: 13px; border-bottom: 2px solid transparent; }
@@ -49,7 +49,7 @@ const _ViewConfiguration =
 			select { min-width: 160px; }
 			button.btn { background: #30363d; color: #e6edf3; border: 0; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
 			button.btn.primary { background: #ff9800; color: #0d1117; }
-			button.btn.danger { background: #da3633; color: #fff; }
+			button.btn.danger { background: #da3633; color: var(--theme-color-background-panel, #fff); }
 			button.btn:hover { filter: brightness(1.15); }
 			button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 		`,

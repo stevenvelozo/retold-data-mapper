@@ -1530,9 +1530,6 @@
           let tmpBtnStyle = pOptions.dangerous ? 'danger' : 'primary';
           let tmpDialog = document.createElement('div');
           tmpDialog.className = 'pict-modal-dialog';
-          if (pOptions.unbounded) {
-            tmpDialog.className += ' pict-modal-dialog--unbounded';
-          }
           tmpDialog.id = 'pict-modal-' + tmpId;
           tmpDialog.setAttribute('role', 'dialog');
           tmpDialog.setAttribute('aria-modal', 'true');
@@ -1572,9 +1569,6 @@
           let tmpHasPhrase = typeof pOptions.confirmPhrase === 'string' && pOptions.confirmPhrase.length > 0;
           let tmpDialog = document.createElement('div');
           tmpDialog.className = 'pict-modal-dialog';
-          if (pOptions.unbounded) {
-            tmpDialog.className += ' pict-modal-dialog--unbounded';
-          }
           tmpDialog.id = 'pict-modal-' + tmpId;
           tmpDialog.setAttribute('role', 'dialog');
           tmpDialog.setAttribute('aria-modal', 'true');
@@ -1738,366 +1732,6 @@
     }, {}],
     6: [function (require, module, exports) {
       /**
-       * Pict-Modal-Dropdown
-       *
-       * Anchor-positioned menu that behaves like a dropdown / popover. Handy for:
-       *   - nav menus that hang off a header link or button
-       *   - "split button" style addenda (a primary action paired with a chevron
-       *     that opens a list of related/alternate actions)
-       *   - any "more options" affordance where a full modal would be heavy
-       *
-       * Differences from the modal Window helper:
-       *   - No backdrop overlay — the rest of the page stays interactive.
-       *   - Positioned next to the anchor element, not centered.
-       *   - Auto-flips above when there isn't room below; clamps inside the viewport.
-       *   - Click outside or Escape dismisses (matches native menu conventions).
-       *
-       * Usage:
-       *     modal.dropdown(anchorEl, {
-       *         items:
-       *         [
-       *             { Hash: 'edit',   Label: 'Edit'                    },
-       *             { Hash: 'rename', Label: 'Rename...'                },
-       *             { Separator: true                                   },
-       *             { Hash: 'delete', Label: 'Delete', Style: 'danger'  },
-       *             { Hash: 'archive',Label: 'Archive', Disabled: true,
-       *               Tooltip: 'Already archived'                       }
-       *         ],
-       *         align: 'left'        // 'left' | 'right' (relative to anchor)
-       *     }).then((pChoice) => { ... });
-       *
-       * Returns a Promise that resolves with `{ Hash, Item }` on selection or
-       * `null` on dismiss.
-       */
-      class PictModalDropdown {
-        constructor(pModal) {
-          this._modal = pModal;
-          this._activeMenu = null;
-        }
-
-        /**
-         * Open a dropdown menu anchored to an element.
-         *
-         * @param {HTMLElement|string|object} pAnchor - Element, CSS selector, or
-         *   a rect-like { left, top, width, height } anchor (handy for context menus).
-         * @param {object} pOptions
-         * @param {Array}    pOptions.items     - [{ Hash, Label, Style?, Disabled?, Tooltip?, Icon?, Separator? }]
-         * @param {string}   [pOptions.align]   - 'left'|'right' (default 'left')
-         * @param {string}   [pOptions.position]- 'auto'|'below'|'above' (default 'auto')
-         * @param {string}   [pOptions.minWidth]- CSS minWidth (default: anchor width if known, else '160px')
-         * @param {string}   [pOptions.maxHeight]- CSS maxHeight (default '60vh')
-         * @param {string}   [pOptions.className]- extra class(es) for the menu element
-         * @param {boolean}  [pOptions.closeOnSelect] - default true
-         * @param {function} [pOptions.onSelect]- called with (Hash, Item) on selection
-         * @param {function} [pOptions.onClose] - called after dismiss
-         * @returns {Promise<{Hash: string, Item: object}|null>}
-         */
-        dropdown(pAnchor, pOptions) {
-          let tmpOptions = Object.assign({
-            align: 'left',
-            position: 'auto',
-            maxHeight: '60vh',
-            closeOnSelect: true
-          }, pOptions || {});
-          let tmpAnchorEl = this._resolveAnchor(pAnchor);
-          let tmpAnchorRect = this._anchorRect(pAnchor, tmpAnchorEl);
-          if (!tmpAnchorRect) {
-            return Promise.resolve(null);
-          }
-
-          // Re-opening the same menu is a no-op; closing-then-reopening is a
-          // caller decision (just call dismissDropdown() first).
-          if (this._activeMenu && this._activeMenu.anchor === tmpAnchorEl) {
-            return this._activeMenu.promise;
-          }
-
-          // Only one dropdown at a time keeps focus / keyboard handling sane.
-          this.dismissAll();
-          let tmpItems = Array.isArray(tmpOptions.items) ? tmpOptions.items : [];
-          let tmpResolveOuter;
-          let tmpPromise = new Promise(fResolve => {
-            tmpResolveOuter = fResolve;
-          });
-          let tmpMenu = this._buildMenu(tmpItems, tmpOptions);
-          document.body.appendChild(tmpMenu);
-          this._positionMenu(tmpMenu, tmpAnchorRect, tmpOptions);
-
-          // Animate in on the next frame.
-          void tmpMenu.offsetHeight;
-          tmpMenu.classList.add('pict-modal-visible');
-          let tmpDismiss = pResult => {
-            if (tmpMenu._dismissed) {
-              return;
-            }
-            tmpMenu._dismissed = true;
-            document.removeEventListener('mousedown', tmpOutsideHandler, true);
-            document.removeEventListener('keydown', tmpKeyHandler, true);
-            window.removeEventListener('resize', tmpRepositionHandler);
-            window.removeEventListener('scroll', tmpRepositionHandler, true);
-            tmpMenu.classList.remove('pict-modal-visible');
-            setTimeout(() => {
-              if (tmpMenu.parentNode) {
-                tmpMenu.parentNode.removeChild(tmpMenu);
-              }
-            }, 180);
-            if (this._activeMenu && this._activeMenu.element === tmpMenu) {
-              this._activeMenu = null;
-            }
-            if (typeof tmpOptions.onClose === 'function') {
-              tmpOptions.onClose(pResult);
-            }
-            tmpResolveOuter(pResult);
-          };
-
-          // Wire item clicks (each item element carries a data-hash; separators
-          // and disabled items are skipped).
-          let tmpItemEls = tmpMenu.querySelectorAll('[data-pict-modal-dropdown-item]');
-          for (let i = 0; i < tmpItemEls.length; i++) {
-            let tmpEl = tmpItemEls[i];
-            tmpEl.addEventListener('click', pEvent => {
-              if (tmpEl.hasAttribute('data-disabled')) {
-                return;
-              }
-              pEvent.stopPropagation();
-              let tmpIdx = parseInt(tmpEl.getAttribute('data-index'), 10);
-              let tmpItem = tmpItems[tmpIdx];
-              let tmpHash = tmpEl.getAttribute('data-hash');
-              if (typeof tmpOptions.onSelect === 'function') {
-                tmpOptions.onSelect(tmpHash, tmpItem);
-              }
-              if (tmpOptions.closeOnSelect !== false) {
-                tmpDismiss({
-                  Hash: tmpHash,
-                  Item: tmpItem
-                });
-              }
-            });
-          }
-
-          // Click anywhere outside the menu (and outside the anchor) → dismiss.
-          // Use mousedown/capture so we beat any per-element click handlers.
-          let tmpOutsideHandler = pEvent => {
-            if (tmpMenu.contains(pEvent.target)) {
-              return;
-            }
-            if (tmpAnchorEl && tmpAnchorEl.contains && tmpAnchorEl.contains(pEvent.target)) {
-              return;
-            }
-            tmpDismiss(null);
-          };
-          document.addEventListener('mousedown', tmpOutsideHandler, true);
-
-          // Esc dismisses; arrow keys navigate items (skipping disabled/separator).
-          let tmpKeyHandler = pEvent => {
-            if (pEvent.key === 'Escape') {
-              pEvent.stopPropagation();
-              tmpDismiss(null);
-              return;
-            }
-            if (pEvent.key === 'ArrowDown' || pEvent.key === 'ArrowUp') {
-              pEvent.preventDefault();
-              this._focusNeighbor(tmpMenu, pEvent.key === 'ArrowDown' ? 1 : -1);
-            } else if (pEvent.key === 'Enter' || pEvent.key === ' ') {
-              let tmpFocused = document.activeElement;
-              if (tmpFocused && tmpMenu.contains(tmpFocused) && tmpFocused.hasAttribute('data-pict-modal-dropdown-item')) {
-                pEvent.preventDefault();
-                tmpFocused.click();
-              }
-            }
-          };
-          document.addEventListener('keydown', tmpKeyHandler, true);
-
-          // Reposition on viewport resize / scroll so the menu doesn't drift
-          // off the anchor.
-          let tmpRepositionHandler = () => {
-            let tmpRect = this._anchorRect(pAnchor, tmpAnchorEl);
-            if (tmpRect) {
-              this._positionMenu(tmpMenu, tmpRect, tmpOptions);
-            }
-          };
-          window.addEventListener('resize', tmpRepositionHandler);
-          window.addEventListener('scroll', tmpRepositionHandler, true);
-
-          // Move keyboard focus to the first enabled item so arrows / Enter work
-          // without an extra click.
-          setTimeout(() => {
-            this._focusFirstEnabled(tmpMenu);
-          }, 0);
-          this._activeMenu = {
-            element: tmpMenu,
-            anchor: tmpAnchorEl,
-            promise: tmpPromise,
-            dismiss: tmpDismiss
-          };
-          return tmpPromise;
-        }
-
-        /**
-         * Dismiss the currently-open dropdown (if any).
-         */
-        dismissAll() {
-          if (this._activeMenu) {
-            let tmpDismiss = this._activeMenu.dismiss;
-            this._activeMenu = null;
-            tmpDismiss(null);
-          }
-        }
-
-        // ─────────────────────────────────────────────
-        //  Internals
-        // ─────────────────────────────────────────────
-
-        _resolveAnchor(pAnchor) {
-          if (!pAnchor) {
-            return null;
-          }
-          if (typeof pAnchor === 'string') {
-            return document.querySelector(pAnchor);
-          }
-          if (pAnchor.nodeType === 1) {
-            return pAnchor;
-          }
-          // rect-like — no element to attach focus / outside-click ignore to,
-          // but that's fine, the caller knows what they're doing.
-          return null;
-        }
-        _anchorRect(pAnchor, pAnchorEl) {
-          if (pAnchorEl && typeof pAnchorEl.getBoundingClientRect === 'function') {
-            return pAnchorEl.getBoundingClientRect();
-          }
-          if (pAnchor && typeof pAnchor === 'object' && typeof pAnchor.left === 'number' && typeof pAnchor.top === 'number') {
-            return {
-              left: pAnchor.left,
-              top: pAnchor.top,
-              width: pAnchor.width || 0,
-              height: pAnchor.height || 0,
-              right: pAnchor.left + (pAnchor.width || 0),
-              bottom: pAnchor.top + (pAnchor.height || 0)
-            };
-          }
-          return null;
-        }
-        _buildMenu(pItems, pOptions) {
-          let tmpId = this._modal._nextId();
-          let tmpMenu = document.createElement('div');
-          tmpMenu.className = 'pict-modal-dropdown';
-          if (pOptions.className) {
-            tmpMenu.className += ' ' + pOptions.className;
-          }
-          tmpMenu.id = 'pict-modal-dropdown-' + tmpId;
-          tmpMenu.setAttribute('role', 'menu');
-          tmpMenu.style.maxHeight = pOptions.maxHeight;
-          let tmpHtml = '';
-          for (let i = 0; i < pItems.length; i++) {
-            let tmpItem = pItems[i];
-            if (tmpItem.Separator) {
-              tmpHtml += '<div class="pict-modal-dropdown-separator" role="separator"></div>';
-              continue;
-            }
-            if (tmpItem.Header) {
-              tmpHtml += '<div class="pict-modal-dropdown-header">' + this._escapeHTML(tmpItem.Header) + '</div>';
-              continue;
-            }
-            let tmpCls = 'pict-modal-dropdown-item';
-            if (tmpItem.Style) {
-              tmpCls += ' pict-modal-dropdown-item--' + tmpItem.Style;
-            }
-            if (tmpItem.Disabled) {
-              tmpCls += ' pict-modal-dropdown-item--disabled';
-            }
-            let tmpAttrs = '' + ' data-pict-modal-dropdown-item' + ' data-index="' + i + '"' + ' data-hash="' + this._escapeHTML(tmpItem.Hash || '') + '"' + ' role="menuitem"' + ' tabindex="-1"';
-            if (tmpItem.Disabled) {
-              tmpAttrs += ' aria-disabled="true" data-disabled';
-            }
-            if (tmpItem.Tooltip) {
-              tmpAttrs += ' title="' + this._escapeHTML(tmpItem.Tooltip) + '"';
-            }
-            let tmpIcon = tmpItem.Icon ? '<span class="pict-modal-dropdown-item-icon">' + tmpItem.Icon + '</span>' : '';
-            let tmpHint = tmpItem.Hint ? '<span class="pict-modal-dropdown-item-hint">' + this._escapeHTML(tmpItem.Hint) + '</span>' : '';
-            tmpHtml += '<div class="' + tmpCls + '"' + tmpAttrs + '>' + tmpIcon + '<span class="pict-modal-dropdown-item-label">' + this._escapeHTML(tmpItem.Label || '') + '</span>' + tmpHint + '</div>';
-          }
-          tmpMenu.innerHTML = tmpHtml;
-          return tmpMenu;
-        }
-        _positionMenu(pMenu, pAnchorRect, pOptions) {
-          // Apply min-width before measuring so the menu's natural size accounts
-          // for the constraint.
-          let tmpMinWidth = pOptions.minWidth || (pAnchorRect.width >= 80 ? Math.ceil(pAnchorRect.width) + 'px' : '160px');
-          pMenu.style.minWidth = tmpMinWidth;
-
-          // Measure after attaching.
-          let tmpMenuRect = pMenu.getBoundingClientRect();
-          let tmpVw = window.innerWidth || document.documentElement.clientWidth;
-          let tmpVh = window.innerHeight || document.documentElement.clientHeight;
-          let tmpGap = 4; // breathing room between anchor and menu
-
-          // Vertical: prefer below; flip above when not enough room and there's
-          // more above. 'below'/'above' overrides force the side.
-          let tmpRoomBelow = tmpVh - pAnchorRect.bottom - tmpGap;
-          let tmpRoomAbove = pAnchorRect.top - tmpGap;
-          let tmpPlaceAbove;
-          if (pOptions.position === 'above') {
-            tmpPlaceAbove = true;
-          } else if (pOptions.position === 'below') {
-            tmpPlaceAbove = false;
-          } else {
-            tmpPlaceAbove = tmpMenuRect.height > tmpRoomBelow && tmpRoomAbove > tmpRoomBelow;
-          }
-
-          // Cap height to whichever side we landed on so the menu can scroll
-          // internally instead of running off the screen.
-          let tmpCap = Math.max(80, (tmpPlaceAbove ? tmpRoomAbove : tmpRoomBelow) - 8);
-          pMenu.style.maxHeight = tmpCap + 'px';
-
-          // Horizontal alignment to the anchor, then clamp inside the viewport.
-          let tmpLeft;
-          if (pOptions.align === 'right') {
-            tmpLeft = pAnchorRect.right - tmpMenuRect.width;
-          } else if (pOptions.align === 'center') {
-            tmpLeft = pAnchorRect.left + (pAnchorRect.width - tmpMenuRect.width) / 2;
-          } else {
-            tmpLeft = pAnchorRect.left;
-          }
-          tmpLeft = Math.min(tmpLeft, tmpVw - tmpMenuRect.width - 4);
-          tmpLeft = Math.max(4, tmpLeft);
-          let tmpTop;
-          if (tmpPlaceAbove) {
-            tmpTop = Math.max(4, pAnchorRect.top - tmpMenuRect.height - tmpGap);
-            pMenu.classList.add('pict-modal-dropdown--above');
-          } else {
-            tmpTop = pAnchorRect.bottom + tmpGap;
-            pMenu.classList.remove('pict-modal-dropdown--above');
-          }
-          pMenu.style.left = Math.round(tmpLeft) + 'px';
-          pMenu.style.top = Math.round(tmpTop) + 'px';
-        }
-        _focusFirstEnabled(pMenu) {
-          let tmpItems = pMenu.querySelectorAll('[data-pict-modal-dropdown-item]:not([data-disabled])');
-          if (tmpItems.length) {
-            tmpItems[0].focus();
-          }
-        }
-        _focusNeighbor(pMenu, pDirection) {
-          let tmpItems = Array.prototype.slice.call(pMenu.querySelectorAll('[data-pict-modal-dropdown-item]:not([data-disabled])'));
-          if (!tmpItems.length) {
-            return;
-          }
-          let tmpActive = document.activeElement;
-          let tmpIdx = tmpItems.indexOf(tmpActive);
-          let tmpNext = tmpIdx === -1 ? pDirection > 0 ? 0 : tmpItems.length - 1 : (tmpIdx + pDirection + tmpItems.length) % tmpItems.length;
-          tmpItems[tmpNext].focus();
-        }
-        _escapeHTML(pText) {
-          if (typeof pText !== 'string') {
-            return '';
-          }
-          return pText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        }
-      }
-      module.exports = PictModalDropdown;
-    }, {}],
-    7: [function (require, module, exports) {
-      /**
        * Pict-Modal-Overlay
        *
        * Manages a shared backdrop overlay element appended to document.body.
@@ -2184,7 +1818,7 @@
       }
       module.exports = PictModalOverlay;
     }, {}],
-    8: [function (require, module, exports) {
+    7: [function (require, module, exports) {
       /**
        * Pict-Modal-Panel
        *
@@ -2446,7 +2080,7 @@
       }
       module.exports = PictModalPanel;
     }, {}],
-    9: [function (require, module, exports) {
+    8: [function (require, module, exports) {
       /**
        * Pict-Modal-Toast
        *
@@ -2613,7 +2247,7 @@
       }
       module.exports = PictModalToast;
     }, {}],
-    10: [function (require, module, exports) {
+    9: [function (require, module, exports) {
       /**
        * Pict-Modal-Tooltip
        *
@@ -2868,7 +2502,7 @@
       }
       module.exports = PictModalTooltip;
     }, {}],
-    11: [function (require, module, exports) {
+    10: [function (require, module, exports) {
       /**
        * Pict-Modal-Window
        *
@@ -2888,7 +2522,6 @@
          * @param {Array} [pOptions.buttons] - Array of { Hash, Label, Style }
          * @param {boolean} [pOptions.closeable] - Whether the close button and overlay dismiss are enabled
          * @param {string} [pOptions.width] - CSS width value
-         * @param {boolean} [pOptions.unbounded] - If true, removes the default 90vh/90vw viewport cap. The dialog will grow with its content and may extend beyond the viewport.
          * @param {function} [pOptions.onOpen] - Called after dialog is shown, receives dialog element
          * @param {function} [pOptions.onClose] - Called after dialog is dismissed
          * @returns {Promise<string|null>} Resolves with clicked button Hash, or null on close
@@ -2912,9 +2545,6 @@
           let tmpId = this._modal._nextId();
           let tmpDialog = document.createElement('div');
           tmpDialog.className = 'pict-modal-dialog';
-          if (pOptions.unbounded) {
-            tmpDialog.className += ' pict-modal-dialog--unbounded';
-          }
           tmpDialog.id = 'pict-modal-' + tmpId;
           tmpDialog.setAttribute('role', 'dialog');
           tmpDialog.setAttribute('aria-modal', 'true');
@@ -3079,7 +2709,7 @@
       }
       module.exports = PictModalWindow;
     }, {}],
-    12: [function (require, module, exports) {
+    11: [function (require, module, exports) {
       module.exports = {
         "AutoInitialize": true,
         "AutoRender": false,
@@ -3090,24 +2720,21 @@
           "title": "Confirm",
           "confirmLabel": "OK",
           "cancelLabel": "Cancel",
-          "dangerous": false,
-          "unbounded": false
+          "dangerous": false
         },
         "DefaultDoubleConfirmOptions": {
           "title": "Are you sure?",
           "confirmLabel": "Confirm",
           "cancelLabel": "Cancel",
           "phrasePrompt": "Type \"{phrase}\" to confirm:",
-          "confirmPhrase": "",
-          "unbounded": false
+          "confirmPhrase": ""
         },
         "DefaultModalOptions": {
           "title": "",
           "content": "",
           "buttons": [],
           "closeable": true,
-          "width": "480px",
-          "unbounded": false
+          "width": "480px"
         },
         "DefaultTooltipOptions": {
           "position": "top",
@@ -3178,20 +2805,6 @@
 	--pict-modal-tooltip-border-radius: 4px;
 	--pict-modal-tooltip-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 
-	/* Dropdown */
-	--pict-modal-dropdown-bg: #ffffff;
-	--pict-modal-dropdown-fg: #1a1a1a;
-	--pict-modal-dropdown-border: #e0e0e0;
-	--pict-modal-dropdown-border-radius: 6px;
-	--pict-modal-dropdown-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-	--pict-modal-dropdown-item-hover-bg: rgba(37, 99, 235, 0.10);
-	--pict-modal-dropdown-item-hover-fg: #1a1a1a;
-	--pict-modal-dropdown-item-disabled-fg: #9aa0a6;
-	--pict-modal-dropdown-separator: #e8e8e8;
-	--pict-modal-dropdown-header-fg: #6b7280;
-	--pict-modal-dropdown-danger-fg: #dc2626;
-	--pict-modal-dropdown-primary-fg: #2563eb;
-
 	/* Typography */
 	--pict-modal-font-family: system-ui, -apple-system, sans-serif;
 	--pict-modal-font-size: 14px;
@@ -3250,15 +2863,6 @@
 {
 	opacity: 1;
 	transform: translate(-50%, -50%) translateY(0);
-}
-
-/* Unbounded modifier — lets callers opt out of the 90vh/90vw viewport cap.
-   Use with caution: content taller than the viewport will push buttons
-   below the fold. */
-.pict-modal-dialog.pict-modal-dialog--unbounded
-{
-	max-height: none;
-	max-width: none;
 }
 
 .pict-modal-dialog-header
@@ -3576,114 +3180,6 @@
 	margin-top: -4px;
 }
 
-/* ── Dropdown ─────────────────────────────────────────────────────────
-   Anchor-positioned menu (no overlay). Used for nav menus and
-   "split button" addenda — see Pict-Modal-Dropdown.js.
-*/
-.pict-modal-dropdown
-{
-	position: fixed;
-	z-index: 1025;
-	min-width: 160px;
-	max-width: 360px;
-	max-height: 60vh;
-	overflow-y: auto;
-	background: var(--pict-modal-dropdown-bg);
-	color: var(--pict-modal-dropdown-fg);
-	border: 1px solid var(--pict-modal-dropdown-border);
-	border-radius: var(--pict-modal-dropdown-border-radius);
-	box-shadow: var(--pict-modal-dropdown-shadow);
-	font-family: var(--pict-modal-font-family);
-	font-size: var(--pict-modal-font-size);
-	padding: 4px 0;
-	opacity: 0;
-	transform: translateY(-4px);
-	transition: opacity var(--pict-modal-transition-duration) ease,
-	            transform var(--pict-modal-transition-duration) ease;
-}
-
-.pict-modal-dropdown.pict-modal-dropdown--above { transform: translateY(4px); }
-
-.pict-modal-dropdown.pict-modal-visible
-{
-	opacity: 1;
-	transform: translateY(0);
-}
-
-.pict-modal-dropdown-item
-{
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	padding: 7px 14px;
-	cursor: pointer;
-	user-select: none;
-	color: inherit;
-	outline: none;
-}
-
-.pict-modal-dropdown-item:hover,
-.pict-modal-dropdown-item:focus
-{
-	background: var(--pict-modal-dropdown-item-hover-bg);
-	color: var(--pict-modal-dropdown-item-hover-fg);
-}
-
-.pict-modal-dropdown-item--disabled
-{
-	cursor: not-allowed;
-	color: var(--pict-modal-dropdown-item-disabled-fg);
-}
-
-.pict-modal-dropdown-item--disabled:hover,
-.pict-modal-dropdown-item--disabled:focus
-{
-	background: transparent;
-	color: var(--pict-modal-dropdown-item-disabled-fg);
-}
-
-.pict-modal-dropdown-item--primary { color: var(--pict-modal-dropdown-primary-fg); }
-.pict-modal-dropdown-item--danger  { color: var(--pict-modal-dropdown-danger-fg); }
-
-.pict-modal-dropdown-item-icon
-{
-	flex: 0 0 auto;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 16px;
-	height: 16px;
-}
-
-.pict-modal-dropdown-item-icon svg { width: 100%; height: 100%; display: block; }
-
-.pict-modal-dropdown-item-label { flex: 1 1 auto; min-width: 0; }
-
-.pict-modal-dropdown-item-hint
-{
-	flex: 0 0 auto;
-	font-size: 11px;
-	opacity: 0.6;
-	margin-left: 12px;
-}
-
-.pict-modal-dropdown-separator
-{
-	height: 1px;
-	background: var(--pict-modal-dropdown-separator);
-	margin: 4px 0;
-}
-
-.pict-modal-dropdown-header
-{
-	padding: 6px 14px 2px;
-	font-size: 11px;
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
-	color: var(--pict-modal-dropdown-header-fg);
-}
-
 /* ── Resizable / Collapsible Panels ──────────────── */
 .pict-panel
 {
@@ -3828,7 +3324,7 @@
 `
       };
     }, {}],
-    13: [function (require, module, exports) {
+    12: [function (require, module, exports) {
       const libPictViewClass = require('pict-view');
       const libPictModalOverlay = require('./Pict-Modal-Overlay.js');
       const libPictModalConfirm = require('./Pict-Modal-Confirm.js');
@@ -3836,7 +3332,6 @@
       const libPictModalToast = require('./Pict-Modal-Toast.js');
       const libPictModalTooltip = require('./Pict-Modal-Tooltip.js');
       const libPictModalPanel = require('./Pict-Modal-Panel.js');
-      const libPictModalDropdown = require('./Pict-Modal-Dropdown.js');
       const _DefaultConfiguration = require('./Pict-Section-Modal-DefaultConfiguration.js');
       class PictSectionModal extends libPictViewClass {
         constructor(pFable, pOptions, pServiceHash) {
@@ -3852,7 +3347,6 @@
           this._toast = new libPictModalToast(this);
           this._tooltip = new libPictModalTooltip(this);
           this._panel = new libPictModalPanel(this);
-          this._dropdown = new libPictModalDropdown(this);
         }
         onBeforeInitialize() {
           super.onBeforeInitialize();
@@ -3954,29 +3448,6 @@
           return this._toast.toast(pMessage, pOptions);
         }
 
-        // -- Dropdown API --
-
-        /**
-         * Open an anchor-positioned dropdown menu (no backdrop, click-outside
-         * dismisses). Useful for nav menus and split-button addenda.
-         *
-         * @param {HTMLElement|string|object} pAnchor - Element, CSS selector, or
-         *   { left, top, width, height } rect for context-menu style anchoring.
-         * @param {object} pOptions - { items, align, position, minWidth, maxHeight,
-         *   className, closeOnSelect, onSelect, onClose }
-         * @returns {Promise<{Hash, Item}|null>} Selection or null on dismiss.
-         */
-        dropdown(pAnchor, pOptions) {
-          return this._dropdown.dropdown(pAnchor, pOptions);
-        }
-
-        /**
-         * Dismiss any open dropdown.
-         */
-        dismissDropdowns() {
-          this._dropdown.dismissAll();
-        }
-
         // -- Panel API --
 
         /**
@@ -4023,7 +3494,6 @@
           this.dismissModals();
           this.dismissTooltips();
           this.dismissToasts();
-          this.dismissDropdowns();
         }
 
         /**
@@ -4049,16 +3519,15 @@
       module.exports.default_configuration = _DefaultConfiguration;
     }, {
       "./Pict-Modal-Confirm.js": 5,
-      "./Pict-Modal-Dropdown.js": 6,
-      "./Pict-Modal-Overlay.js": 7,
-      "./Pict-Modal-Panel.js": 8,
-      "./Pict-Modal-Toast.js": 9,
-      "./Pict-Modal-Tooltip.js": 10,
-      "./Pict-Modal-Window.js": 11,
-      "./Pict-Section-Modal-DefaultConfiguration.js": 12,
-      "pict-view": 15
+      "./Pict-Modal-Overlay.js": 6,
+      "./Pict-Modal-Panel.js": 7,
+      "./Pict-Modal-Toast.js": 8,
+      "./Pict-Modal-Tooltip.js": 9,
+      "./Pict-Modal-Window.js": 10,
+      "./Pict-Section-Modal-DefaultConfiguration.js": 11,
+      "pict-view": 14
     }],
-    14: [function (require, module, exports) {
+    13: [function (require, module, exports) {
       module.exports = {
         "name": "pict-view",
         "version": "1.0.68",
@@ -4112,7 +3581,7 @@
         }
       };
     }, {}],
-    15: [function (require, module, exports) {
+    14: [function (require, module, exports) {
       const libFableServiceBase = require('fable-serviceproviderbase');
       const libPackage = require('../package.json');
       const defaultPictViewSettings = {
@@ -5299,10 +4768,10 @@
       }
       module.exports = PictView;
     }, {
-      "../package.json": 14,
+      "../package.json": 13,
       "fable-serviceproviderbase": 2
     }],
-    16: [function (require, module, exports) {
+    15: [function (require, module, exports) {
       /**
        * Retold DataMapper — Dashboard Shell Pict Application
        *
@@ -5352,11 +4821,11 @@
       }
       module.exports = DashboardShellApplication;
     }, {
-      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 25,
+      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 24,
       "pict-application": 4,
-      "pict-section-modal": 13
+      "pict-section-modal": 12
     }],
-    17: [function (require, module, exports) {
+    16: [function (require, module, exports) {
       /**
        * Retold DataMapper — Pict Application
        *
@@ -5434,15 +4903,15 @@
       module.exports = DataMapperApplication;
       module.exports.default_configuration = {};
     }, {
-      "./providers/Pict-Provider-MapperAPI.js": 22,
-      "./views/PictView-Mapper-BeaconBrowser.js": 35,
-      "./views/PictView-Mapper-FieldMapper.js": 36,
-      "./views/PictView-Mapper-JSONEditor.js": 37,
-      "./views/PictView-Mapper-Layout.js": 38,
-      "./views/PictView-Mapper-MappingList.js": 39,
+      "./providers/Pict-Provider-MapperAPI.js": 21,
+      "./views/PictView-Mapper-BeaconBrowser.js": 34,
+      "./views/PictView-Mapper-FieldMapper.js": 35,
+      "./views/PictView-Mapper-JSONEditor.js": 36,
+      "./views/PictView-Mapper-Layout.js": 37,
+      "./views/PictView-Mapper-MappingList.js": 38,
       "pict-application": 4
     }],
-    18: [function (require, module, exports) {
+    17: [function (require, module, exports) {
       /**
        * Retold DataMapper — Cohesive MapperShell Application
        *
@@ -5616,16 +5085,16 @@
       module.exports = MapperShellApplication;
       module.exports.default_configuration = _DefaultConfiguration;
     }, {
-      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 25,
-      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 29,
-      "./vendor/pict-section-operation/source/Pict-Section-Operation.js": 33,
-      "./views/PictView-MapperShell-Connections.js": 40,
-      "./views/PictView-MapperShell-Layout.js": 41,
-      "./views/PictView-MapperShell-TopNav.js": 42,
+      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 24,
+      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 28,
+      "./vendor/pict-section-operation/source/Pict-Section-Operation.js": 32,
+      "./views/PictView-MapperShell-Connections.js": 39,
+      "./views/PictView-MapperShell-Layout.js": 40,
+      "./views/PictView-MapperShell-TopNav.js": 41,
       "pict-application": 4,
-      "pict-section-modal": 13
+      "pict-section-modal": 12
     }],
-    19: [function (require, module, exports) {
+    18: [function (require, module, exports) {
       /**
        * Retold DataMapper — Mapping Shell Pict Application
        *
@@ -5665,11 +5134,11 @@
       }
       module.exports = MappingShellApplication;
     }, {
-      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 29,
+      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 28,
       "pict-application": 4,
-      "pict-section-modal": 13
+      "pict-section-modal": 12
     }],
-    20: [function (require, module, exports) {
+    19: [function (require, module, exports) {
       /**
        * Retold DataMapper — Operation Shell Pict Application
        *
@@ -5707,11 +5176,11 @@
       }
       module.exports = OperationShellApplication;
     }, {
-      "./vendor/pict-section-operation/source/Pict-Section-Operation.js": 33,
+      "./vendor/pict-section-operation/source/Pict-Section-Operation.js": 32,
       "pict-application": 4,
-      "pict-section-modal": 13
+      "pict-section-modal": 12
     }],
-    21: [function (require, module, exports) {
+    20: [function (require, module, exports) {
       /**
        * Retold DataMapper — Browser Bundle Entry
        *
@@ -5747,24 +5216,24 @@
       window.OperationShellApplication = libOperationShellApp;
       window.MapperShellApplication = libMapperShellApp;
     }, {
-      "./Pict-Application-DashboardShell.js": 16,
-      "./Pict-Application-DataMapper.js": 17,
-      "./Pict-Application-MapperShell.js": 18,
-      "./Pict-Application-MappingShell.js": 19,
-      "./Pict-Application-OperationShell.js": 20,
-      "./providers/Pict-Provider-MapperAPI.js": 22,
-      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 25,
-      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 29,
-      "./vendor/pict-section-operation/source/Pict-Section-Operation.js": 33,
-      "./views/PictView-Mapper-BeaconBrowser.js": 35,
-      "./views/PictView-Mapper-FieldMapper.js": 36,
-      "./views/PictView-Mapper-JSONEditor.js": 37,
-      "./views/PictView-Mapper-Layout.js": 38,
-      "./views/PictView-Mapper-MappingList.js": 39,
+      "./Pict-Application-DashboardShell.js": 15,
+      "./Pict-Application-DataMapper.js": 16,
+      "./Pict-Application-MapperShell.js": 17,
+      "./Pict-Application-MappingShell.js": 18,
+      "./Pict-Application-OperationShell.js": 19,
+      "./providers/Pict-Provider-MapperAPI.js": 21,
+      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 24,
+      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 28,
+      "./vendor/pict-section-operation/source/Pict-Section-Operation.js": 32,
+      "./views/PictView-Mapper-BeaconBrowser.js": 34,
+      "./views/PictView-Mapper-FieldMapper.js": 35,
+      "./views/PictView-Mapper-JSONEditor.js": 36,
+      "./views/PictView-Mapper-Layout.js": 37,
+      "./views/PictView-Mapper-MappingList.js": 38,
       "pict-application": 4,
-      "pict-view": 15
+      "pict-view": 14
     }],
-    22: [function (require, module, exports) {
+    21: [function (require, module, exports) {
       /**
        * Retold DataMapper — API Provider
        *
@@ -6272,9 +5741,9 @@
         AutoRender: false
       };
     }, {
-      "pict-view": 15
+      "pict-view": 14
     }],
-    23: [function (require, module, exports) {
+    22: [function (require, module, exports) {
       /**
        * Pict-Section-Dashboard CSS
        *
@@ -6353,7 +5822,7 @@
 }
 .psd-btn:hover { background: #1e293b; color: var(--psd-fg); }
 .psd-btn.psd-btn-primary { background: var(--psd-accent); border-color: var(--psd-accent); color: var(--psd-accent-fg); }
-.psd-btn.psd-btn-primary:hover { background: #1d4ed8; }
+.psd-btn.psd-btn-primary:hover { background: var(--theme-color-brand-primary-hover, #1d4ed8); }
 .psd-btn.psd-btn-danger { background: transparent; color: var(--psd-danger-fg); border-color: var(--psd-danger); }
 .psd-btn.psd-btn-danger:hover { background: var(--psd-danger); color: var(--psd-accent-fg); }
 
@@ -6455,7 +5924,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 .psd-mode-render-only .psd-list-row .psd-row-actions { display: none; }
 `;
     }, {}],
-    24: [function (require, module, exports) {
+    23: [function (require, module, exports) {
       /**
        * Pict-Section-Dashboard default configuration.
        *
@@ -6490,7 +5959,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
         ListCompactRows: 10 // default cap for list-compact panels
       };
     }, {}],
-    25: [function (require, module, exports) {
+    24: [function (require, module, exports) {
       /**
        * Pict-Section-Dashboard
        *
@@ -7124,12 +6593,12 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports.default_configuration = PictSectionDashboard.default_configuration;
       module.exports.APIProvider = libAPIProvider;
     }, {
-      "./Pict-Section-Dashboard-CSS.js": 23,
-      "./Pict-Section-Dashboard-DefaultConfiguration.js": 24,
-      "./providers/PictProvider-Dashboard-API.js": 26,
-      "pict-view": 15
+      "./Pict-Section-Dashboard-CSS.js": 22,
+      "./Pict-Section-Dashboard-DefaultConfiguration.js": 23,
+      "./providers/PictProvider-Dashboard-API.js": 25,
+      "pict-view": 14
     }],
-    26: [function (require, module, exports) {
+    25: [function (require, module, exports) {
       /**
        * Pict-Section-Dashboard API Provider
        *
@@ -7256,7 +6725,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = DashboardAPIProvider;
       module.exports.SCOPE_STORAGE_KEY = SCOPE_STORAGE_KEY;
     }, {}],
-    27: [function (require, module, exports) {
+    26: [function (require, module, exports) {
       /**
        * Pict-Section-Mapping CSS
        *
@@ -7332,9 +6801,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 }
 .psm-btn:hover { background: #1e293b; color: var(--psm-fg); }
 .psm-btn.psm-btn-primary { background: var(--psm-accent); border-color: var(--psm-accent); color: var(--psm-accent-fg); }
-.psm-btn.psm-btn-primary:hover { background: #1d4ed8; }
+.psm-btn.psm-btn-primary:hover { background: var(--theme-color-brand-primary-hover, #1d4ed8); }
 .psm-btn.psm-btn-success { background: var(--psm-success); border-color: var(--psm-success); color: var(--psm-success-fg); }
-.psm-btn.psm-btn-success:hover { background: #15803d; }
+.psm-btn.psm-btn-success:hover { background: var(--theme-color-status-success, #15803d); }
 .psm-btn.psm-btn-danger { background: transparent; color: var(--psm-danger-fg); border-color: var(--psm-danger); }
 .psm-btn.psm-btn-danger:hover { background: var(--psm-danger); color: var(--psm-accent-fg); }
 .psm-btn[disabled], .psm-btn.psm-btn-disabled { opacity: 0.5; pointer-events: none; }
@@ -7450,7 +6919,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 }
 `;
     }, {}],
-    28: [function (require, module, exports) {
+    27: [function (require, module, exports) {
       /**
        * Pict-Section-Mapping default configuration.
        *
@@ -7663,7 +7132,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
         }]
       };
     }, {}],
-    29: [function (require, module, exports) {
+    28: [function (require, module, exports) {
       /**
        * Pict-Section-Mapping
        *
@@ -8101,12 +7570,12 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports.APIProvider = libAPIProvider;
       module.exports.DEFAULT_MAPPING_CONFIGURATION = DEFAULT_MAPPING_CONFIGURATION;
     }, {
-      "./Pict-Section-Mapping-CSS.js": 27,
-      "./Pict-Section-Mapping-DefaultConfiguration.js": 28,
-      "./providers/PictProvider-Mapping-API.js": 30,
-      "pict-view": 15
+      "./Pict-Section-Mapping-CSS.js": 26,
+      "./Pict-Section-Mapping-DefaultConfiguration.js": 27,
+      "./providers/PictProvider-Mapping-API.js": 29,
+      "pict-view": 14
     }],
-    30: [function (require, module, exports) {
+    29: [function (require, module, exports) {
       /**
        * Pict-Section-Mapping API Provider
        *
@@ -8227,7 +7696,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = MappingAPIProvider;
       module.exports.SCOPE_STORAGE_KEY = SCOPE_STORAGE_KEY;
     }, {}],
-    31: [function (require, module, exports) {
+    30: [function (require, module, exports) {
       /**
        * Pict-Section-Operation CSS
        *
@@ -8305,9 +7774,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 }
 .pso-btn:hover { background: #1e293b; color: var(--pso-fg); }
 .pso-btn.pso-btn-primary { background: var(--pso-accent); border-color: var(--pso-accent); color: var(--pso-accent-fg); }
-.pso-btn.pso-btn-primary:hover { background: #1d4ed8; }
+.pso-btn.pso-btn-primary:hover { background: var(--theme-color-brand-primary-hover, #1d4ed8); }
 .pso-btn.pso-btn-success { background: var(--pso-success); border-color: var(--pso-success); color: var(--pso-success-fg); }
-.pso-btn.pso-btn-success:hover { background: #15803d; }
+.pso-btn.pso-btn-success:hover { background: var(--theme-color-status-success, #15803d); }
 .pso-btn.pso-btn-danger { background: transparent; color: var(--pso-danger-fg); border-color: var(--pso-danger); }
 .pso-btn.pso-btn-danger:hover { background: var(--pso-danger); color: var(--pso-accent-fg); }
 .pso-btn[disabled], .pso-btn.pso-btn-disabled { opacity: 0.5; pointer-events: none; }
@@ -8480,7 +7949,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 }
 `;
     }, {}],
-    32: [function (require, module, exports) {
+    31: [function (require, module, exports) {
       /**
        * Pict-Section-Operation default configuration.
        *
@@ -8744,7 +8213,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
         }]
       };
     }, {}],
-    33: [function (require, module, exports) {
+    32: [function (require, module, exports) {
       /**
        * Pict-Section-Operation
        *
@@ -9340,12 +8809,12 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports.DEFAULT_CONF_BY_TYPE = DEFAULT_CONF_BY_TYPE;
       module.exports.TYPE_HELP = TYPE_HELP;
     }, {
-      "./Pict-Section-Operation-CSS.js": 31,
-      "./Pict-Section-Operation-DefaultConfiguration.js": 32,
-      "./providers/PictProvider-Operation-API.js": 34,
-      "pict-view": 15
+      "./Pict-Section-Operation-CSS.js": 30,
+      "./Pict-Section-Operation-DefaultConfiguration.js": 31,
+      "./providers/PictProvider-Operation-API.js": 33,
+      "pict-view": 14
     }],
-    34: [function (require, module, exports) {
+    33: [function (require, module, exports) {
       /**
        * Pict-Section-Operation API Provider
        *
@@ -9470,7 +8939,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = OperationAPIProvider;
       module.exports.SCOPE_STORAGE_KEY = SCOPE_STORAGE_KEY;
     }, {}],
-    35: [function (require, module, exports) {
+    34: [function (require, module, exports) {
       /**
        * DataMapper BeaconBrowser View
        *
@@ -9588,9 +9057,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictViewMapperBeaconBrowser;
       module.exports.default_configuration = _ViewConfiguration;
     }, {
-      "pict-view": 15
+      "pict-view": 14
     }],
-    36: [function (require, module, exports) {
+    35: [function (require, module, exports) {
       /**
        * DataMapper FieldMapper View
        *
@@ -9760,9 +9229,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictViewMapperFieldMapper;
       module.exports.default_configuration = _ViewConfiguration;
     }, {
-      "pict-view": 15
+      "pict-view": 14
     }],
-    37: [function (require, module, exports) {
+    36: [function (require, module, exports) {
       /**
        * DataMapper JSONEditor View
        *
@@ -9888,9 +9357,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictViewMapperJSONEditor;
       module.exports.default_configuration = _ViewConfiguration;
     }, {
-      "pict-view": 15
+      "pict-view": 14
     }],
-    38: [function (require, module, exports) {
+    37: [function (require, module, exports) {
       /**
        * DataMapper Layout View
        *
@@ -9921,14 +9390,14 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 			.mapper-header h1 { margin: 0; font-size: 16px; font-weight: 600; color: #ff9800; }
 			.mapper-uv-controls { display: flex; gap: 6px; align-items: center; flex: 1; }
 			.mapper-uv-controls input { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 4px 8px; border-radius: 4px; font-size: 13px; min-width: 220px; }
-			.mapper-uv-controls button { background: #238636; color: #fff; border: 0; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+			.mapper-uv-controls button { background: #238636; color: var(--theme-color-background-panel, #fff); border: 0; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
 			.mapper-uv-controls button.secondary { background: #30363d; }
 			.mapper-uv-controls button:hover { filter: brightness(1.15); }
 			.mapper-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
 			.badge-neutral { background: #30363d; color: #8b949e; }
-			.badge-success { background: #238636; color: #fff; }
-			.badge-error { background: #da3633; color: #fff; }
-			.badge-info { background: #1f6feb; color: #fff; }
+			.badge-success { background: #238636; color: var(--theme-color-background-panel, #fff); }
+			.badge-error { background: #da3633; color: var(--theme-color-background-panel, #fff); }
+			.badge-info { background: #1f6feb; color: var(--theme-color-background-panel, #fff); }
 			.mapper-status { color: #8b949e; font-size: 12px; }
 			.mapper-tabs { background: #161b22; border-bottom: 1px solid #30363d; padding: 0 20px; display: flex; gap: 2px; }
 			.mapper-tab { background: transparent; border: 0; color: #8b949e; padding: 10px 16px; cursor: pointer; font-size: 13px; border-bottom: 2px solid transparent; }
@@ -9942,7 +9411,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 			select { min-width: 160px; }
 			button.btn { background: #30363d; color: #e6edf3; border: 0; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
 			button.btn.primary { background: #ff9800; color: #0d1117; }
-			button.btn.danger { background: #da3633; color: #fff; }
+			button.btn.danger { background: #da3633; color: var(--theme-color-background-panel, #fff); }
 			button.btn:hover { filter: brightness(1.15); }
 			button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 		`,
@@ -10048,9 +9517,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictViewMapperLayout;
       module.exports.default_configuration = _ViewConfiguration;
     }, {
-      "pict-view": 15
+      "pict-view": 14
     }],
-    39: [function (require, module, exports) {
+    38: [function (require, module, exports) {
       /**
        * DataMapper MappingList View
        *
@@ -10148,9 +9617,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = PictViewMapperMappingList;
       module.exports.default_configuration = _ViewConfiguration;
     }, {
-      "pict-view": 15
+      "pict-view": 14
     }],
-    40: [function (require, module, exports) {
+    39: [function (require, module, exports) {
       /**
        * Retold DataMapper — Connection Discovery View (Phase 4)
        *
@@ -10354,9 +9823,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 	text-align: center;
 }
 .msh-cd-btn:hover { background: #1e293b; color: #f8fafc; }
-.msh-cd-btn.msh-cd-btn-primary { background: #1d4ed8; color: #fff; border-color: #1d4ed8; align-self: flex-start; }
+.msh-cd-btn.msh-cd-btn-primary { background: var(--theme-color-brand-primary-hover, #1d4ed8); color: var(--theme-color-background-panel, #fff); border-color: var(--theme-color-brand-primary-hover, #1d4ed8); align-self: flex-start; }
 .msh-cd-btn.msh-cd-btn-primary:hover { background: #1e40af; }
-.msh-cd-btn.msh-cd-btn-success { background: #15803d; color: #dcfce7; border-color: #166534; }
+.msh-cd-btn.msh-cd-btn-success { background: var(--theme-color-status-success, #15803d); color: #dcfce7; border-color: #166534; }
 .msh-cd-btn.msh-cd-btn-success:hover { background: #166534; }
 .msh-cd-btn.msh-cd-btn-link { background: transparent; border: 0; color: #93c5fd; padding: 4px 8px; }
 .msh-cd-btn.msh-cd-btn-link:hover { color: #bfdbfe; background: transparent; }
@@ -10378,7 +9847,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 	padding: 12px 14px;
 	background: #2a1010;
 	color: #fecaca;
-	border: 1px solid #b91c1c;
+	border: 1px solid var(--theme-color-status-error, #b91c1c);
 	border-radius: 4px;
 	font-size: 12px;
 	margin-bottom: 12px;
@@ -10438,9 +9907,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 	border-radius: 8px;
 	padding: 18px 20px;
 }
-.msh-cd-results.msh-cd-results-success { border-color: #15803d; }
+.msh-cd-results.msh-cd-results-success { border-color: var(--theme-color-status-success, #15803d); }
 .msh-cd-results.msh-cd-results-partial { border-color: #f59e0b; }
-.msh-cd-results.msh-cd-results-error   { border-color: #b91c1c; }
+.msh-cd-results.msh-cd-results-error   { border-color: var(--theme-color-status-error, #b91c1c); }
 .msh-cd-results h3 { margin: 0 0 12px 0; color: #f8fafc; font-size: 14px; }
 .msh-cd-result-row
 {
@@ -10952,9 +10421,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = MapperShellConnectionsView;
       module.exports.default_configuration = _Configuration;
     }, {
-      "pict-view": 15
+      "pict-view": 14
     }],
-    41: [function (require, module, exports) {
+    40: [function (require, module, exports) {
       /**
        * Retold DataMapper — MapperShell Layout View
        *
@@ -11030,9 +10499,9 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports = MapperShellLayoutView;
       module.exports.default_configuration = _Configuration;
     }, {
-      "pict-view": 15
+      "pict-view": 14
     }],
-    42: [function (require, module, exports) {
+    41: [function (require, module, exports) {
       /**
        * Retold DataMapper — MapperShell Top Navigation View
        *
@@ -11093,7 +10562,7 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 	border: 1px solid #1e293b;
 }
 .msh-tab:hover { background: #1e293b; color: #f8fafc; }
-.msh-tab.msh-tab-active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+.msh-tab.msh-tab-active { background: var(--theme-color-brand-primary-hover, #1d4ed8); color: var(--theme-color-background-panel, #fff); border-color: var(--theme-color-brand-primary-hover, #1d4ed8); }
 .msh-scope-label { color: #94a3b8; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
 .msh-scope-input
 {
@@ -11187,8 +10656,8 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
       module.exports.default_configuration = _Configuration;
       module.exports.TabKeys = _TabKeys;
     }, {
-      "pict-view": 15
+      "pict-view": 14
     }]
-  }, {}, [21])(21);
+  }, {}, [20])(20);
 });
 //# sourceMappingURL=retold-data-mapper.js.map
